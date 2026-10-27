@@ -1,7 +1,9 @@
-﻿from pathlib import Path
+﻿
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "generated"
+
 
 def create_knob(diameter=25, height=15, shaft_diameter=6):
     diameter = float(diameter)
@@ -40,16 +42,60 @@ difference() {{
 }}
 """
 
-    path = OUTPUT / "moonman_knob.scad"
-    path.write_text(scad, encoding="utf-8")
+    version = 1
+
+    while True:
+        path = OUTPUT / f"moonman_knob_v{version:03d}.scad"
+
+        try:
+            with path.open("x", encoding="utf-8") as file:
+                file.write(scad)
+            break
+        except FileExistsError:
+            version += 1
+
+        	
+
+    state = {
+        "diameter": diameter,
+        "height": height,
+        "shaft_diameter": shaft_diameter,
+        "file": str(path),
+    }
+
+    (OUTPUT / "knob_state.json").write_text(
+        __import__("json").dumps(state, indent=2),
+        encoding="utf-8",
+    )
 
     return path
-
-
 if __name__ == "__main__":
     result = create_knob()
     print("MOON MAN CAD GENERATOR")
     print("Created:", result)
-    print("Dimensions: 25 mm diameter x 15 mm height")
-    print("Shaft bore: 6.2 mm")
     print("Status: awaiting engineering review")
+
+import json
+
+STATE_FILE = OUTPUT / "knob_state.json"
+
+
+def revise_knob(diameter=None, height=None, shaft_diameter=None):
+    if not STATE_FILE.exists():
+        raise ValueError(
+            "No active knob design. Create a knob first."
+        )
+
+    state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+
+    return create_knob(
+        diameter=state["diameter"] if diameter is None else diameter,
+        height=state["height"] if height is None else height,
+        shaft_diameter=(
+            state["shaft_diameter"]
+            if shaft_diameter is None
+            else shaft_diameter
+        ),
+    )
+
+

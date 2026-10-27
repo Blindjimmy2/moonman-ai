@@ -7,3 +7,21 @@ __pycache__/
 desktop.ini
 moonman_test.jpg
 /data/
+
+# Moon Man local secrets
+.env
+*.env
+!.env.example
+
+# Generated manufacturing files and approval state
+generated/
+
+# Local backups
+*.backup
+*.backup_*
+*.before_*
+
+# Python cache
+__pycache__/
+*.pyc
+.venv/

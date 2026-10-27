@@ -1,4 +1,4 @@
-﻿import os
+import os
 import base64
 import urllib.request
 from collections import deque
@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pathlib import Path
 from memory import remember, recall, correct
-from cad import create_knob
-
+from cad import create_knob, revise_knob, STATE_FILE
+from preview import show_design
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
@@ -72,6 +72,29 @@ CAD_TOOLS = [
             }
         }
     }
+,
+    {
+        "type": "function",
+        "function": {
+            "name": "revise_knob",
+            "description": (
+                "Revise the active knob design using NEW TOTAL dimensions "
+                "in millimeters. Unspecified dimensions remain unchanged. "
+                "For relative requests like '5 mm taller', first calculate "
+                "the new total from the active design dimensions provided "
+                "in the system context. Never guess dimensions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "diameter": {"type": "number"},
+                    "height": {"type": "number"},
+                    "shaft_diameter": {"type": "number"}
+                },
+                "additionalProperties": False
+            }
+        }
+    }
 ]
 history = deque(maxlen=12)
 
@@ -102,6 +125,26 @@ def capture_image():
 
 
 def ask_moonman(question):
+    # MOONMAN_PRINT_COMMANDS
+    command = question.strip().lower()
+
+    if command == "prepare print":
+        from print_approval import prepare_print
+        from pathlib import Path
+
+        gcode = (
+            Path(__file__).resolve().parent.parent
+            / "generated"
+            / "moonman_knob_v007_test.gcode"
+        )
+        prepare_print(gcode)
+        return "Longer is ready. Print prepared. Say CONFIRM PRINT to authorize the physical print."
+
+    if command == "confirm print":
+        from print_approval import confirm_print
+        confirm_print()
+        return "Print-start request submitted to OctoPrint. Check the printer status."
+
     lower = question.lower().strip()
 
     # Explicit memory commands: remember SUBJECT: FACT
@@ -175,7 +218,25 @@ def ask_moonman(question):
         if stored_facts
         else "No relevant stored facts found."
     )
+    cad_context = "No active CAD design."
 
+    if STATE_FILE.exists():
+        import json
+
+        state = json.loads(
+            STATE_FILE.read_text(encoding="utf-8")
+        )
+
+        cad_context = (
+            "ACTIVE KNOB DESIGN:\n"
+            f"Diameter: {state['diameter']} mm\n"
+            f"Height: {state['height']} mm\n"
+            f"Shaft diameter: {state['shaft_diameter']} mm\n"
+            f"File: {state['file']}\n"
+            "For relative revisions, calculate the NEW TOTAL "
+            "dimension before calling revise_knob. "
+            "Preserve all unspecified dimensions."
+        )
     image = capture_image()
     encoded = base64.b64encode(image).decode("ascii")
 
@@ -186,6 +247,7 @@ def ask_moonman(question):
             "role": "system",
             "content": SYSTEM_PROMPT + (
                 "\nRelevant stored memories:\n" + memory_context
++ "\n\nCurrent CAD state:\n" + cad_context
             ),
         }
     ]
@@ -220,6 +282,23 @@ def ask_moonman(question):
         results = []
 
         for call in message.tool_calls:
+            if call.function.name == "revise_knob":
+                args = json.loads(call.function.arguments)
+
+                path = revise_knob(
+                    diameter=args.get("diameter"),
+                    height=args.get("height"),
+                    shaft_diameter=args.get("shaft_diameter"),
+                )    
+                show_design(path)
+
+                results.append(
+                    f"CAD REVISED: {path}\n"
+                    "Previous version preserved.\n"
+                    "Status: Awaiting engineering review. Not printed."
+                )
+                continue
+
             if call.function.name != "create_knob":
                 results.append("Unknown CAD tool requested.")
                 continue
@@ -240,6 +319,7 @@ def ask_moonman(question):
                 height=args["height"],
                 shaft_diameter=args["shaft_diameter"],
             )
+            show_design(path)
 
             results.append(
                 f"CAD CREATED: {path}\n"
