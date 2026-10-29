@@ -25,3 +25,33 @@ generated/
 __pycache__/
 *.pyc
 .venv/
+
+# Moon Man local secrets
+.env
+.env.*
+!.env.example
+**/.archie_ssh_secret
+**/*secret*
+**/*credential*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local backups
+*.bak
+*backup*.py
+*before*.py
+*overwritten*.py
+*pre_fusion_restore*.bak
+
+# Generated manufacturing output
+generated/
+*.gcode
+*.3mf
+
+# Temporary voice recordings
+src/moonman_pocket.wav
+src/moonman_voice.wav
