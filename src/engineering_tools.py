@@ -16,7 +16,10 @@ def _safe_path(path):
 def engineering_list(path="."):
     p = _safe_path(path)
     if not p.is_dir():
-        raise ValueError("Not a directory")
+        raise ValueError(
+            "Not a directory: %r. Use '.' or a workspace-relative directory "
+            "(paths are relative to the engineering workspace root)." % (path,)
+        )
     return {"files": [
         {"name": x.name, "directory": x.is_dir()}
         for x in sorted(p.iterdir())[:100]

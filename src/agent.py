@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import base64
 import urllib.request
 from collections import deque
@@ -127,16 +128,98 @@ def capture_image():
         raise RuntimeError("No JPEG frame found.")
 
 
+VISION_IMAGE_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+}
+MAX_VISION_IMAGES = 4
+MAX_VISION_IMAGE_BYTES = 10_000_000
+
+
+def find_image_paths(question):
+    """Return existing image files named in the question, in order."""
+    text = question or ""
+    candidates = [match.group(1)
+                  for match in re.finditer(r'"([^"]+)"', text)]
+    candidates.extend(
+        match.group(0) for match in re.finditer(
+            r"[A-Za-z]:[\\/][^\n\"']+?\.(?:jpg|jpeg|png|gif|webp|bmp)\b"
+            r"|/[^\n\"']+?\.(?:jpg|jpeg|png|gif|webp|bmp)\b",
+            text, re.IGNORECASE))
+    found = []
+    for candidate in candidates:
+        path = candidate.strip()
+        if not path or path in found:
+            continue
+        if (os.path.splitext(path)[1].lower() in VISION_IMAGE_TYPES
+                and os.path.isfile(path)):
+            found.append(path)
+    return found[:MAX_VISION_IMAGES]
+
+
+def attach_file_images(user_content, question):
+    """Append image_url parts for image files named in the question."""
+    attached = []
+    for path in find_image_paths(question):
+        try:
+            if os.path.getsize(path) > MAX_VISION_IMAGE_BYTES:
+                print("Image skipped (over size limit):", path)
+                continue
+            with open(path, "rb") as handle:
+                encoded = base64.b64encode(handle.read()).decode("ascii")
+        except OSError as error:
+            print("Image skipped (unreadable %s): %s" % (path, error))
+            continue
+        mime = VISION_IMAGE_TYPES[os.path.splitext(path)[1].lower()]
+        user_content.append({"type": "image_url", "image_url": {
+            "url": "data:%s;base64,%s" % (mime, encoded)}})
+        attached.append(path)
+    if attached:
+        print("Moon Man is looking at file(s):", ", ".join(attached))
+    return attached
+
+
 
 # MOONMAN_FUSION_INTEGRATION_V1
 import urllib.request as _moonman_http
 import time as _moonman_time
 
-MOONMAN_FUSION_TOOLS = [{'type': 'function', 'function': {'name': 'fusion_create_box', 'description': 'Fusion 360 operation create_box. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'width_mm': {'type': 'number'}, 'depth_mm': {'type': 'number'}, 'height_mm': {'type': 'number'}, 'name': {'type': 'string'}}, 'required': ['width_mm', 'depth_mm', 'height_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_create_cylinder', 'description': 'Fusion 360 operation create_cylinder. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'diameter_mm': {'type': 'number'}, 'height_mm': {'type': 'number'}, 'name': {'type': 'string'}}, 'required': ['diameter_mm', 'height_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_create_sketch', 'description': 'Fusion 360 operation create_sketch. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}, 'shape': {'type': 'string'}, 'name': {'type': 'string'}, 'x_mm': {'type': 'number'}, 'y_mm': {'type': 'number'}, 'width_mm': {'type': 'number'}, 'depth_mm': {'type': 'number'}, 'diameter_mm': {'type': 'number'}}, 'required': [], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_extrude_profile', 'description': 'Fusion 360 operation extrude_profile. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}, 'sketch': {'type': 'string'}, 'profile_index': {'type': 'integer'}, 'distance_mm': {'type': 'number'}, 'operation': {'type': 'string'}}, 'required': ['sketch', 'distance_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_create_hole', 'description': 'Fusion 360 operation create_hole. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}, 'diameter_mm': {'type': 'number'}, 'depth_mm': {'type': 'number'}, 'x_mm': {'type': 'number'}, 'y_mm': {'type': 'number'}}, 'required': ['diameter_mm', 'depth_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_fillet_edges', 'description': 'Fusion 360 operation fillet_edges. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}, 'body_index': {'type': 'integer'}, 'edge_indices': {'type': 'array', 'items': {'type': 'integer'}}, 'radius_mm': {'type': 'number'}}, 'required': ['edge_indices', 'radius_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_chamfer_edges', 'description': 'Fusion 360 operation chamfer_edges. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}, 'body_index': {'type': 'integer'}, 'edge_indices': {'type': 'array', 'items': {'type': 'integer'}}, 'distance_mm': {'type': 'number'}}, 'required': ['edge_indices', 'distance_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_inspect_design', 'description': 'Fusion 360 operation inspect_design. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {}, 'required': [], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_export_stl', 'description': 'Fusion 360 operation export_stl. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}}, 'required': ['component'], 'additionalProperties': False}}}]
+MOONMAN_FUSION_TOOLS = [{'type': 'function', 'function': {'name': 'fusion_create_box', 'description': 'Fusion 360 operation create_box. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'width_mm': {'type': 'number'}, 'depth_mm': {'type': 'number'}, 'height_mm': {'type': 'number'}, 'name': {'type': 'string'}}, 'required': ['width_mm', 'depth_mm', 'height_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_create_cylinder', 'description': 'Fusion 360 operation create_cylinder. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'diameter_mm': {'type': 'number'}, 'height_mm': {'type': 'number'}, 'name': {'type': 'string'}}, 'required': ['diameter_mm', 'height_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_create_sketch', 'description': 'Fusion 360 operation create_sketch. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}, 'shape': {'type': 'string'}, 'name': {'type': 'string'}, 'x_mm': {'type': 'number'}, 'y_mm': {'type': 'number'}, 'width_mm': {'type': 'number'}, 'depth_mm': {'type': 'number'}, 'diameter_mm': {'type': 'number'}}, 'required': [], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_extrude_profile', 'description': 'Fusion 360 operation extrude_profile. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}, 'sketch': {'type': 'string'}, 'profile_index': {'type': 'integer'}, 'distance_mm': {'type': 'number'}, 'operation': {'type': 'string'}}, 'required': ['sketch', 'distance_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_create_hole', 'description': 'Fusion 360 operation create_hole. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}, 'diameter_mm': {'type': 'number'}, 'depth_mm': {'type': 'number'}, 'x_mm': {'type': 'number'}, 'y_mm': {'type': 'number'}, 'plane': {'type': 'string', 'description': "Sketch plane, verified live: 'xy' (default): center at world (x_mm, y_mm), cuts one-sided +Z by depth_mm. 'xz': center at world X=x_mm, Z=y_mm, cuts symmetric +-depth_mm about the y=0 plane. 'yz': center at world Y=x_mm, Z=y_mm, cuts symmetric +-depth_mm about the x=0 plane. Cut applies to every body in the component it intersects. Returns volume_change_mm3: negative means material removed; exactly 0.0 means MISS (circle hit no body — never treat a MISS as a hole)."}}, 'required': ['diameter_mm', 'depth_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_fillet_edges', 'description': 'Fusion 360 operation fillet_edges. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}, 'body_index': {'type': 'integer'}, 'edge_indices': {'type': 'array', 'items': {'type': 'integer'}}, 'radius_mm': {'type': 'number'}}, 'required': ['edge_indices', 'radius_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_chamfer_edges', 'description': 'Fusion 360 operation chamfer_edges. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}, 'body_index': {'type': 'integer'}, 'edge_indices': {'type': 'array', 'items': {'type': 'integer'}}, 'distance_mm': {'type': 'number'}}, 'required': ['edge_indices', 'distance_mm'], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_inspect_design', 'description': 'Fusion 360 operation inspect_design. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {}, 'required': [], 'additionalProperties': False}}}, {'type': 'function', 'function': {'name': 'fusion_export_stl', 'description': 'Fusion 360 operation export_stl. Requires a running MoonManBridge. Use explicit dimensions in millimeters. Inspect the design before selecting components or edges. Never invent dimensions or geometry. Do not export or print without user approval.', 'parameters': {'type': 'object', 'properties': {'component': {'type': 'string'}}, 'required': ['component'], 'additionalProperties': False}}}]
+
+MOONMAN_FUSION_TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "fusion_export_body",
+        "description": (
+            "Export exactly one existing Fusion solid body as STL without "
+            "modifying the source design. Inspect the design to identify "
+            "the correct component and body. Use body_index if names are "
+            "ambiguous. Do not print without explicit user approval."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "component": {"type": "string"},
+                "body": {"type": "string"},
+                "body_index": {"type": "integer"}
+            },
+            "required": ["component"],
+            "additionalProperties": False
+        }
+    }
+})
+
 
 CAD_TOOLS.extend(MOONMAN_FUSION_TOOLS)
 
 def moonman_fusion_command(action, arguments):
+    denial = _check_owned(action, arguments)
+    if denial is not None:
+        return denial
     payload = dict(arguments)
     payload["action"] = action
 
@@ -160,6 +243,10 @@ def moonman_fusion_command(action, arguments):
                 result = json.load(response)
 
             if result.get("status") != "queued":
+                if action in ("create_box", "create_cylinder"):
+                    created = result.get("result") or {}
+                    if isinstance(created, dict):
+                        _register_owned(created.get("component", ""))
                 return result
 
         return {
@@ -421,6 +508,171 @@ CAD_TOOLS.append({
 })
 
 
+# MOONMAN_TRACK_V1: gaze tools. The tracker daemon (moonman_track.py) owns
+# servo motion; these tools just publish targets over MQTT (one-shot, the
+# agent keeps no persistent MQTT client). After a successful gaze move the
+# tool loop appends a fresh helmet-cam frame so the model can refine.
+_TRACK_BROKER = os.environ.get("MOONMAN_BROKER", "192.168.1.11")
+_TRACK_PORT = int(os.environ.get("MOONMAN_MQTT_PORT", "1883"))
+GAZE_MOVE_TOOLS = ("gaze_point", "look_at")
+
+def _track_pub(topic, payload):
+    try:
+        import paho.mqtt.client as mqtt_mod
+    except ImportError:
+        print("Track publish failed: paho-mqtt missing")
+        return False
+    try:
+        try:
+            client = mqtt_mod.Client(mqtt_mod.CallbackAPIVersion.VERSION2)
+        except Exception:
+            client = mqtt_mod.Client()
+        client.connect(_TRACK_BROKER, _TRACK_PORT, keepalive=5)
+        if not isinstance(payload, str):
+            payload = json.dumps(payload)
+        client.publish(topic, payload)
+        client.disconnect()
+        return True
+    except Exception as error:
+        print("Track publish failed:", error)
+        return False
+
+def _track_get(timeout=3.0):
+    try:
+        import paho.mqtt.client as mqtt_mod
+    except ImportError:
+        return None
+    box = {}
+    try:
+        try:
+            client = mqtt_mod.Client(mqtt_mod.CallbackAPIVersion.VERSION2)
+        except Exception:
+            client = mqtt_mod.Client()
+        def on_message(_c, _u, m):
+            try:
+                box["status"] = json.loads(m.payload.decode("utf-8", "replace"))
+            except Exception:
+                pass
+            box["got"] = True
+        client.on_message = on_message
+        client.connect(_TRACK_BROKER, _TRACK_PORT, keepalive=5)
+        client.subscribe("moonman/track/status")
+        client.loop_start()
+        waited = 0.0
+        while waited < timeout and "got" not in box:
+            _moonman_time.sleep(0.1)
+            waited += 0.1
+        client.loop_stop()
+        client.disconnect()
+    except Exception as error:
+        print("Track status read failed:", error)
+        return None
+    return box.get("status")
+
+def _track_append_fresh_view(messages, turn_log):
+    moves = sum(1 for entry in turn_log if entry[0] in GAZE_MOVE_TOOLS)
+    if moves > 3:
+        return
+    try:
+        _moonman_time.sleep(0.6)  # let the head arrive
+        frame = capture_image()
+    except Exception as error:
+        print("Gaze view skipped:", error)
+        return
+    try:
+        gaze = _track_get() or {}
+        where = "gaze now (%s,%s)" % (gaze.get("pan"), gaze.get("tilt"))
+    except Exception:
+        where = "gaze unknown"
+    encoded = base64.b64encode(frame).decode("ascii")
+    messages.append({"role": "user", "content": [
+        {"type": "text", "text": "Head moved (%s). Fresh helmet-cam view:" % where},
+        {"type": "image_url", "image_url": {
+            "url": "data:image/jpeg;base64," + encoded}}]})
+    print("Moon Man glanced somewhere new.")
+
+MOONMAN_TRACK_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "gaze_point",
+            "description": (
+                "Turn Moon Man's helmet toward a target visible in the "
+                "helmet-cam image. x,y are FRACTIONS of image width and "
+                "height (0.0-1.0) where the target appears: x=0 is frame "
+                "left, y=0 is frame top. After each move you get a fresh "
+                "helmet-cam view automatically; call again to refine "
+                "(max 3 per turn). Use for 'look at the "
+                "printer/door/person'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "number"},
+                    "y": {"type": "number"}
+                },
+                "required": ["x", "y"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "look_at",
+            "description": (
+                "Point Moon Man's helmet to absolute angles. pan 0-180 "
+                "(0 left, 90 center, 180 right), tilt 45-135 (45 up, 90 "
+                "center, 135 down). Use for 'look left/right/up/down/center'. Prefer gaze_point when you can see "
+                "the target in the helmet-cam image."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pan": {"type": "number"},
+                    "tilt": {"type": "number"}
+                },
+                "required": ["pan", "tilt"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "track_mode",
+            "description": (
+                "Idle head behavior. auto: gentle wander and slow drift "
+                "back to center when idle. still: hold the current "
+                "position."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mode": {"type": "string"}
+                },
+                "required": ["mode"],
+                "additionalProperties": False
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_gaze",
+            "description": (
+                "Read the helmet's current pan/tilt angles and idle mode."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False
+            }
+        }
+    }
+]
+CAD_TOOLS.extend(MOONMAN_TRACK_TOOLS)
+
 # MOONMAN_VOICE_RESTORE_V1
 import subprocess as _voice_subprocess
 import sys as _voice_sys
@@ -454,7 +706,7 @@ def moonman_say(text):
             )
 
         _moonman_voice_process.stdin.write(
-            str(text).replace("\\n", " ") + "\\n"
+            str(text).replace("\n", " ") + "\n"
         )
         _moonman_voice_process.stdin.flush()
 
@@ -535,6 +787,295 @@ CAD_TOOLS.append({
 # MOONMAN_ARCHIE_UPLOAD_INTEGRATION_V1
 from archie_upload import archie_upload_gcode
 
+# MOONMAN_WEB_RESEARCH_V1
+from web_research import web_research
+
+# MOONMAN_PROJECT_MEMORY_V1
+from project_memory import (
+    detect_project, set_active_project, get_active_project,
+    recall_facts, project_brief, write_checkpoint,
+    tool_project_recall, tool_project_checkpoint, tool_project_remember,
+)
+
+# MOONMAN_TRACK2_CLIENT_V1
+COMPONENT_REGISTRY = ROOT / "config" / "moonman_components.json"
+
+SCOPED_WRITE_ACTIONS = frozenset({
+    "create_hole", "fillet_edges", "chamfer_edges", "edit_extrusion",
+    "edit_circle", "move_body", "rotate_body", "rename_body",
+    "delete_body", "delete_feature", "delete_sketch",
+    "extrude_profile", "create_sketch", "align_bodies",
+})
+
+
+def _load_owned():
+    try:
+        data = json.loads(COMPONENT_REGISTRY.read_text(encoding="utf-8"))
+        owned = data.get("owned", [])
+        return {str(name) for name in owned if isinstance(name, str)}
+    except Exception:
+        return set()
+
+
+def _register_owned(name):
+    try:
+        owned = _load_owned()
+        if name and name not in owned:
+            owned.add(name)
+            COMPONENT_REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+            COMPONENT_REGISTRY.write_text(
+                json.dumps({"owned": sorted(owned)}, indent=2),
+                encoding="utf-8")
+    except Exception as error:
+        print("Component registry update failed:", error)
+
+
+def _unregister_owned(name):
+    owned = _load_owned()
+    if name not in owned:
+        return False
+    owned.discard(name)
+    COMPONENT_REGISTRY.write_text(
+        json.dumps({"owned": sorted(owned)}, indent=2),
+        encoding="utf-8")
+    return True
+
+
+def _check_owned(action, arguments):
+    if action not in SCOPED_WRITE_ACTIONS:
+        return None
+    name = arguments.get("component", "")
+    if name in _load_owned():
+        return None
+    return {
+        "status": "error",
+        "error": (
+            "Component %r is not Moon Man-owned. Ask the user to grant it "
+            "with: moonman owns %s" % (name, name)),
+    }
+
+# MOONMAN_AUTONOMY_O1O3_V1
+OBJECTIVE_FILE = ROOT / "moonman_engineering" / "active_objective.md"
+OBJECTIVE_DIR = ROOT / "moonman_engineering" / "objectives"
+MAX_OBJECTIVE_CHARS = 2000
+MAX_OUTCOME_CHARS = 1500
+
+RETRYABLE_READ_TOOLS = frozenset({
+    "engineering_list", "engineering_read", "engineering_test",
+    "archie_list_files", "archie_read_file", "archie_moonraker_status",
+    "archie_inspect", "archie_read_logs", "archie_status",
+    "fusion_inspect_design", "fusion_inspect_features",
+    "fusion_inspect_geometry", "web_research", "project_recall",
+    "project_checkpoint",
+    "fusion_document_info", "fusion_check_clearance",
+    "fusion_interference_check",
+})
+
+AUTONOMY_DIRECTIVE = (
+    "\nEngineering autonomy protocol:\n"
+    "- For a high-level engineering objective: keep a short numbered plan, work it "
+    "stepwise with real tool results, inspect to verify, and continue across turns "
+    "until the design is coherent or you are genuinely blocked.\n"
+    "- Maintain the per-project engineering scratchpad via engineering_write to "
+    "'objectives/<project>.md' (active project shown above; paths are relative to the "
+    "engineering workspace root -- never prefix with 'moonman_engineering/'): objective, "
+    "plan checklist, key dimensions with provenance, artifact paths, blockers. Read it "
+    "back with engineering_read('objectives/<project>.md'). Keep it under ~2 KB. It and "
+    "the turn-outcome records are your memory across turns and restarts; resume "
+    "from them without re-asking.\n"
+    "- Label claims: VERIFIED (seen in tool output this session), PLAN (intended "
+    "steps), UNVERIFIED (inference or web research -- never use as manufacturing "
+    "dimensions), BLOCKED (needs a human).\n"
+    "- If an inspection or read tool fails, retry with corrected input or an "
+    "alternative check; never build dependent geometry on assumed state -- mark "
+    "BLOCKED if the check cannot be satisfied.\n"
+    "- On resume ('continue', new session, new project): re-verify cited files and "
+    "Fusion bodies (filesystem check / fusion_inspect_*) before asserting they "
+    "exist; mark missing ones STALE in scratchpad and checkpoint; never present "
+    "unchecked stored dimensions as current.\n"
+    "- After every hole or cut, check volume_change_mm3: 0.0 means the cut "
+    "missed everything -- inspect, adjust, retry, and delete the no-op "
+    "feature and sketch. Never assume a reported success removed material.\n"
+    "- Fusion turns are pinned to one document: if the active design changes "
+    "mid-turn the turn halts -- tell the user and stop.\n"
+    "- You may only modify Moon Man-owned components (registry). Reads, "
+    "clearance checks, and exports may reference any component. If a write is "
+    "refused, ask the user to grant it with 'moonman owns NAME'.\n"
+    "- Ask the human only when an essential requirement is missing, a meaningful "
+    "tradeoff decision is needed, or approval is required. Never re-ask settled "
+    "matters.\n"
+    "- You have at most 8 tool rounds per turn. Pace multi-stage work; if cut off, "
+    "the next turn continues from the outcome record -- end plateaued turns with "
+    "PROGRESS and NEXT lines.\n"
+    "- Research-before-escalation ladder R1-R5: before asking the human about "
+    "any missing dimension, spec, or blocker, walk (R1) project memory -- "
+    "project_recall including deadend: entries, plus engineering_list/read for "
+    "BOMs and docs; (R2) web_research for technical references (stays "
+    "UNVERIFIED, keep citations); (R3) fusion_inspect_*/clearance/interference "
+    "to measure existing geometry and constraints; (R4) calculate, bound with "
+    "stated uncertainty, or frame a reversible assumption; (R5) decide: act, "
+    "or escalate with a record.\n"
+    "- Decision classes: ACT on verified memory or measured geometry, then "
+    "verify the result. ASSUME only reversible low-risk items: record via "
+    "project_remember with status assumption, stated uncertainty, and how you "
+    "will verify -- then verify. Never fabricate dimensions, never present "
+    "web data as manufacturer specs, never report inferred fits as "
+    "validated.\n"
+    "- Before every hole or cut, predict the expected volume_change_mm3 from "
+    "the geometry; after the cut, flag any mismatch beyond 0.1 and "
+    "investigate before proceeding.\n"
+    "- Never re-search a settled question: check deadend: facts first, and "
+    "record new dead ends as failed facts with sources tried, conflicts, and "
+    "confidence.\n"
+    "- End EVERY runner turn with a footer line, exactly one of: RUN: done "
+    "(objective complete), RUN: continue (more turns needed), RUN: "
+    "needs_human (blocked on a human). With needs_human, append a record:\n"
+    "ESCALATION:\n"
+    "question: <single question>\n"
+    "kind: <ordinary|design_intent|safety|authorization|irreversible>\n"
+    "checked:\n"
+    "- memory: <query> -> <result>\n"
+    "- web: <query> -> <result>\n"
+    "- geometry: <inspection> -> <result>\n"
+    "conflicts: <none|describe>\n"
+    "confidence: <low|medium|high>\n"
+    "why_human: <reason>\n"
+    "Ordinary questions need evidence of at least two ladder avenues "
+    "actually checked (code verifies this against the turn record); safety, "
+    "authorization, and irreversible stops are accepted immediately."
+)
+
+
+def read_objective(project="general"):
+    try:
+        safe = project if (project or "").isidentifier() else "general"
+        path = OBJECTIVE_DIR / (safe + ".md")
+        if not path.is_file():
+            path = OBJECTIVE_FILE
+        if not path.is_file():
+            return "None recorded."
+        text = path.read_text(encoding="utf-8").strip()
+        if not text:
+            return "None recorded."
+        if len(text) > MAX_OBJECTIVE_CHARS:
+            return text[:MAX_OBJECTIVE_CHARS] + "\n[truncated]"
+        return text
+    except Exception:
+        return "None recorded."
+
+
+def _short_result(name, args, result):
+    if not isinstance(result, dict):
+        return "[VERIFIED] %s: %s" % (name, str(result)[:140])
+    status = result.get("status")
+    if status in ("error", "timeout", "failed") or result.get("success") is False:
+        detail = str(result.get("error", "")) or json.dumps(result, default=str)
+        return "[FAILED] %s: %s" % (name, detail[:140])
+    if name == "web_research":
+        cites = result.get("citations", [])
+        count = len(cites) if isinstance(cites, list) else 0
+        return (
+            "[UNVERIFIED] %s: search_occurred=%s, citations=%d (research only)"
+            % (name, result.get("search_occurred"), count)
+        )
+    if name in ("prepare_marvin_print", "prepare_archie_print"):
+        target = result.get("gcode", "") or result.get("stl", "")
+        return "[VERIFIED] %s: %s file=%s print_started=%s" % (
+            name, status,
+            Path(target).name if target else "?",
+            result.get("physical_print_started", False),
+        )
+    if name in ("archie_upload_gcode", "archie_start_print"):
+        return "[VERIFIED] %s: %s file=%s" % (
+            name, status, result.get("filename", "?"))
+    if name in ("create_knob", "revise_knob"):
+        target = result.get("file", "")
+        return "[VERIFIED] %s: file=%s" % (
+            name, Path(target).name if target else "?")
+    if name == "engineering_write":
+        target = result.get("saved", "")
+        return "[VERIFIED] %s: saved=%s" % (
+            name, Path(target).name if target else "?")
+    dims = ""
+    if name.startswith("fusion_") or "knob" in name:
+        dims = " args=" + json.dumps(args, default=str)[:100]
+    return "[VERIFIED] %s:%s %s" % (
+        name, dims, json.dumps(result, default=str)[:140])
+
+
+def build_outcome(turn_log, turn_status):
+    head = ["[TURN OUTCOME -- code-recorded facts]", "Status: " + turn_status]
+    if not turn_log:
+        head.append("Tools: no tool calls this turn.")
+    else:
+        for entry in turn_log[:12]:
+            try:
+                head.append(_short_result(*entry))
+            except Exception:
+                head.append("[VERIFIED] %s: (summary failed)" % (entry[0],))
+        if len(turn_log) > 12:
+            head.append("... +%d more tool calls" % (len(turn_log) - 12))
+    if turn_status in ("round-budget-exhausted", "tool-cap-exhausted"):
+        tail = "NEXT: resume from this record; reply states the next step."
+    elif turn_status == "error-halt":
+        tail = "NEXT: address the FAILED entry above, then continue."
+    else:
+        tail = "NEXT: none recorded -- see reply text."
+    body = "\n".join(head)
+    room = MAX_OUTCOME_CHARS - len(tail) - 1
+    if len(body) > room:
+        body = body[:room] + "\n[trimmed]"
+    return body + "\n" + tail
+
+
+def _write_turn_checkpoint(project, status, rounds_used, calls_used, log):
+    outcome = build_outcome(log, status)
+    verified = []
+    failed = []
+    for entry in log:
+        try:
+            short = _short_result(*entry)
+        except Exception:
+            continue
+        if short.startswith("[FAILED]"):
+            failed.append(short)
+        elif short.startswith("[VERIFIED]"):
+            verified.append(short)
+        elif short.startswith("[UNVERIFIED]"):
+            verified.append(short)
+    tail = outcome.rsplit("\n", 1)[-1]
+    next_step = tail[6:] if tail.startswith("NEXT: ") else ""
+    write_checkpoint(
+        project=project,
+        turn_status=status,
+        rounds_used=rounds_used,
+        tool_calls_used=calls_used,
+        summary=outcome[:600],
+        verified=verified[:10],
+        pending="",
+        blockers="; ".join(failed)[:400],
+        next_step=next_step[:400],
+    )
+
+
+def _summarize_turn(messages):
+    try:
+        prompt = (
+            "Turn tool budget exhausted. Using ONLY the tool results above, write:\n"
+            "PROGRESS: 1-3 factual lines (VERIFIED outcomes, artifact paths).\n"
+            "NEXT: the single exact next tool step to continue.\n"
+            "BLOCKED: only if a human is genuinely required, else 'none'."
+        )
+        response = client.chat.completions.create(
+            model="muse-spark-1.3",
+            messages=messages + [{"role": "user", "content": prompt}],
+            tool_choice="none",
+        )
+        text = (response.choices[0].message.content or "").strip()
+        return text[:1500] if text else None
+    except Exception:
+        return None
+
 CAD_TOOLS.append({
     "type": "function",
     "function": {
@@ -556,6 +1097,177 @@ CAD_TOOLS.append({
     }
 })
 
+# MOONMAN_WEB_RESEARCH_V1
+CAD_TOOLS.append({
+    "type": "function",
+    "function": {
+        "name": "web_research",
+        "description": (
+            "Read-only engineering web research via Meta Search Grounding. "
+            "Use for manufacturer datasheets, servo dimensions, shaft "
+            "specifications, mounting-hole spacing, component identification. "
+            "Returns a grounded answer with citations (URL, title, and text "
+            "spans linking claims to sources) plus a search_occurred flag. "
+            "Results are UNVERIFIED research candidates -- never treat "
+            "returned dimensions as confirmed specs; confirm against the cited "
+            "source before CAD or printing. Never use for printer control."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Engineering research question, max 500 chars."
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": False
+        }
+    }
+})
+
+# MOONMAN_PROJECT_MEMORY_V1
+CAD_TOOLS.extend([
+    {"type": "function", "function": {
+        "name": "project_recall",
+        "description": (
+            "Search namespaced project memory facts for one project. "
+            "Never returns other projects' facts. Use for resume context "
+            "beyond the auto-injected checkpoint summary."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string"},
+            "query": {"type": "string"},
+            "limit": {"type": "integer"}},
+            "required": ["project", "query"]}}},
+    {"type": "function", "function": {
+        "name": "project_checkpoint",
+        "description": (
+            "Read the latest auto-checkpoint for a project: turn status, "
+            "verified refs, blockers, and NEXT step."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string"}},
+            "required": ["project"]}}},
+    {"type": "function", "function": {
+        "name": "project_remember",
+        "description": (
+            "Record a namespaced project fact with a status. Use verified "
+            "ONLY for tool-observed results; use assumption, plan, failed, "
+            "or user_confirmed otherwise. Never record research or inference "
+            "as verified."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string"},
+            "subject": {"type": "string"},
+            "fact": {"type": "string"},
+            "status": {"type": "string"},
+            "provenance": {"type": "string"}},
+            "required": ["project", "subject", "fact", "status"]}}},
+])
+
+# MOONMAN_TRACK2_TOOLS_V1
+CAD_TOOLS.extend([
+    {"type": "function", "function": {
+        "name": "fusion_save_document",
+        "description": (
+            "Save the active Fusion design. No arguments needed when the "
+            "design was saved before. For an unsaved design requires name, "
+            "which creates a cloud document by that name -- confirm the name "
+            "with the user first."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string"}},
+            "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "fusion_delete_body",
+        "description": (
+            "Permanently delete one solid body from a Moon Man-owned "
+            "component. Inspect geometry first. Cannot be undone via Moon Man."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "component": {"type": "string"},
+            "body": {"type": "string"},
+            "body_index": {"type": "integer"}},
+            "required": ["component"],
+            "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "fusion_delete_feature",
+        "description": (
+            "Permanently delete one feature (extrusion, fillet, chamfer, "
+            "hole, move) by exact name from inspect_features, in a Moon "
+            "Man-owned component. Cannot be undone via Moon Man."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "component": {"type": "string"},
+            "feature": {"type": "string"}},
+            "required": ["component", "feature"],
+            "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "fusion_delete_sketch",
+        "description": (
+            "Permanently delete one sketch by exact name from inspect_design, "
+            "in a Moon Man-owned component. Cannot be undone via Moon Man."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "component": {"type": "string"},
+            "sketch": {"type": "string"}},
+            "required": ["component", "sketch"],
+            "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "fusion_document_info",
+        "description": (
+            "Read-only: active document title and saved state. No parameters."
+        ),
+        "parameters": {"type": "object", "properties": {},
+            "required": [],
+            "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "fusion_check_clearance",
+        "description": (
+            "Read-only bounding-box clearance between two bodies, which may "
+            "belong to any components. Returns per-axis gaps and an overlap "
+            "flag. Approximation -- use interference_check for exact."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "component_a": {"type": "string"},
+            "body_a": {"type": "integer"},
+            "component_b": {"type": "string"},
+            "body_b": {"type": "integer"}},
+            "required": ["component_a", "component_b"],
+            "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "fusion_interference_check",
+        "description": (
+            "Read-only exact solid interference between two bodies via "
+            "temporary geometry; never modifies the design. Bodies may belong "
+            "to any components. Returns interferes true/false and volume."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "component_a": {"type": "string"},
+            "body_a": {"type": "integer"},
+            "component_b": {"type": "string"},
+            "body_b": {"type": "integer"}},
+            "required": ["component_a", "component_b"],
+            "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "fusion_align_bodies",
+        "description": (
+            "Move a Moon Man-owned body so its bounding box aligns to a "
+            "target body's on chosen axes (center, min, or max). Target may "
+            "be any component and is never moved. Inspect both first."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "component": {"type": "string"},
+            "body_index": {"type": "integer"},
+            "target_component": {"type": "string"},
+            "target_body": {"type": "integer"},
+            "axes": {"type": "string"},
+            "mode": {"type": "string"}},
+            "required": ["component", "target_component"],
+            "additionalProperties": False}}},
+])
+
 def ask_moonman(question):
     # Explicit approval for the pending, verified Marvin job.
     command = question.strip().lower()
@@ -569,6 +1281,22 @@ def ask_moonman(question):
             return f"Print not started or start unconfirmed: {error}"
 
     lower = question.lower().strip()
+
+    if lower.startswith("moonman owns "):
+        grant = question[len("moonman owns "):].strip()
+        if not grant:
+            return "Name the component, e.g. moonman owns BRACKET"
+        _register_owned(grant)
+        return "Moon Man now owns component: " + grant
+
+    if lower.startswith("moonman release "):
+        drop = question[len("moonman release "):].strip()
+        try:
+            if _unregister_owned(drop):
+                return "Moon Man released component: " + drop
+            return "That component was not Moon Man-owned: " + drop
+        except Exception as error:
+            return "Registry update failed: " + str(error)
 
     # Explicit memory commands: remember SUBJECT: FACT
     if lower.startswith("remember "):
@@ -623,8 +1351,17 @@ def ask_moonman(question):
             f"- {fact}" for fact in facts
         )
 
+    try:
+        detected = detect_project(question)
+        if detected:
+            set_active_project(detected)
+        active_project = get_active_project()
+    except Exception:
+        active_project = "general"
+
     # Ordinary conversation gets relevant stored facts
     stored_facts = []
+    project_hits = []
     words = [
         word.strip(".,?!:;")
         for word in question.split()
@@ -637,10 +1374,26 @@ def ask_moonman(question):
                 stored_facts.append(fact)
 
     memory_context = (
-        "\n".join(f"- {fact}" for fact in stored_facts[:10])
+        "\n".join(f"- [general] {fact}" for fact in stored_facts[:5])
         if stored_facts
         else "No relevant stored facts found."
     )
+    try:
+        for word in words[:5]:
+            for row in recall_facts(active_project, word, 3):
+                label = "[%s:%s] %s: %s" % (
+                    active_project, row["status"], row["subject"], row["fact"])
+                if label not in project_hits and len(project_hits) < 3:
+                    project_hits.append(label)
+    except Exception:
+        project_hits = []
+    if project_hits:
+        memory_context = (
+            "Project memory:\n"
+            + "\n".join("- " + hit for hit in project_hits)
+            + "\n" + memory_context
+        )
+
     cad_context = "No active CAD design."
 
     if STATE_FILE.exists():
@@ -675,19 +1428,36 @@ def ask_moonman(question):
             "If a tool reports an error, stop and explain it."
     }]
     messages.extend(history)
+    messages[0]["content"] += (
+        "\n\nActive project: " + active_project + "\n" + project_brief(active_project)
+        + "\n\nActive engineering objective (scratchpad):\n" + read_objective(active_project)
+        + AUTONOMY_DIRECTIVE
+    )
     user_content = [{"type": "text", "text": question}]
-    try:
-        encoded = base64.b64encode(capture_image()).decode("ascii")
-        user_content.append({"type": "image_url", "image_url": {
-            "url": "data:image/jpeg;base64," + encoded}})
-    except Exception as error:
-        print("Camera unavailable; continuing with text:", error)
+    attach_file_images(user_content, question)
+    vision_phrases = (
+        "what do you see", "what can you see",
+        "look at", "take a look", "look around",
+        "use your camera", "check your camera",
+        "show me what you see", "inspect visually",
+        "look through your camera"
+    )
+    if any(phrase in question.lower() for phrase in vision_phrases):
+        try:
+            encoded = base64.b64encode(capture_image()).decode("ascii")
+            user_content.append({"type": "image_url", "image_url": {
+                "url": "data:image/jpeg;base64," + encoded}})
+        except Exception as error:
+            print("Camera unavailable; continuing with text:", error)
     messages.append({"role": "user", "content": user_content})
 
     max_rounds = 8
     max_tool_calls = 20
     tool_count = 0
+    turn_log = []
     answer = ""
+    turn_status = "completed"
+    turn_doc = None
     for round_number in range(max_rounds):
         response = client.chat.completions.create(
             model="muse-spark-1.3", messages=messages,
@@ -705,9 +1475,11 @@ def ask_moonman(question):
         for call in calls:
             tool_count += 1
             if tool_count > max_tool_calls:
+                turn_status = "tool-cap-exhausted"
                 error_result = "Stopped: too many tool calls."
                 break
             name = call.function.name
+            args = {}
             try:
                 args = json.loads(call.function.arguments or "{}")
                 if not isinstance(args, dict):
@@ -765,16 +1537,34 @@ def ask_moonman(question):
                     result = engineering_test(args.get("path", ""))
                 elif name == "prepare_marvin_print":
                     result = prepare_marvin_print(args.get("stl_path", ""))
+                elif name == "project_recall":
+                    result = tool_project_recall(args.get("project", ""), args.get("query", ""), args.get("limit", 5))
+                elif name == "project_checkpoint":
+                    result = tool_project_checkpoint(args.get("project", ""))
+                elif name == "project_remember":
+                    result = tool_project_remember(args.get("project", ""), args.get("subject", ""), args.get("fact", ""), args.get("status", "assumption"), args.get("provenance", ""))
+                elif name == "web_research":
+                    result = web_research(args.get("query", ""))
                 elif name.startswith("fusion_"):
                     action = name[len("fusion_"):]
                     allowed = {"create_box", "create_cylinder", "create_sketch",
                                "extrude_profile", "create_hole", "fillet_edges",
-                               "chamfer_edges", "inspect_design", "export_stl",
+                               "chamfer_edges", "inspect_design", "export_stl", "export_body",
                            "inspect_features", "edit_extrusion", "edit_circle",
-                           "inspect_geometry", "move_body", "rotate_body", "rename_body"}
+                           "inspect_geometry", "move_body", "rotate_body", "rename_body",
+                           "delete_body", "delete_feature", "delete_sketch", "save_document",
+                           "document_info", "check_clearance", "interference_check", "align_bodies"}
                     if action not in allowed:
                         raise ValueError("Unknown Fusion action: " + action)
                     result = moonman_fusion_command(action, args)
+                    if isinstance(result, dict) and "Unsupported action" in str(result.get("error", "")):
+                        result = {"status": "error", "error": result["error"] + " Restart the MoonManBridge add-in in Fusion to load new actions, then retry."}
+                    doc_now = result.get("document") if isinstance(result, dict) else None
+                    if doc_now:
+                        if turn_doc is None:
+                            turn_doc = doc_now
+                        elif doc_now != turn_doc:
+                            result = {"status": "error", "error": "Active Fusion document changed mid-turn (was %r, now %r). Stopped to avoid writing to the wrong design." % (turn_doc, doc_now)}
                 elif name == "create_knob":
                     required = ("diameter", "height", "shaft_diameter")
                     if any(k not in args for k in required):
@@ -791,6 +1581,28 @@ def ask_moonman(question):
                     show_design(path)
                     result = {"status": "ok", "file": str(path),
                               "message": "Previous version preserved; not printed"}
+                elif name == "gaze_point":
+                    ok = _track_pub("moonman/track/look",
+                                    {"fx": args.get("x"), "fy": args.get("y")})
+                    result = {"status": "ok" if ok else "unavailable",
+                              "message": "glancing" if ok else
+                              "tracker unreachable (is moonman_track.py running?)"}
+                elif name == "look_at":
+                    ok = _track_pub("moonman/track/look",
+                                    {"pan": args.get("pan"), "tilt": args.get("tilt")})
+                    result = {"status": "ok" if ok else "unavailable",
+                              "message": "moving" if ok else
+                              "tracker unreachable (is moonman_track.py running?)"}
+                elif name == "track_mode":
+                    ok = _track_pub("moonman/track/mode", args.get("mode", "auto"))
+                    result = {"status": "ok" if ok else "unavailable",
+                              "message": "mode set" if ok else
+                              "tracker unreachable (is moonman_track.py running?)"}
+                elif name == "get_gaze":
+                    gaze = _track_get()
+                    result = {"status": "ok", **gaze} if gaze else \
+                        {"status": "unavailable",
+                         "message": "tracker unreachable (is moonman_track.py running?)"}
                 else:
                     raise ValueError("Unknown tool: " + name)
                 if not isinstance(result, dict):
@@ -798,25 +1610,45 @@ def ask_moonman(question):
             except Exception as error:
                 result = {"status": "error", "error": str(error)}
             print("TOOL", name, json.dumps(result, default=str))
+            turn_log.append((name, args, result))
             messages.append({"role": "tool", "tool_call_id": call.id,
                              "content": json.dumps(result, default=str)})
+            if name in GAZE_MOVE_TOOLS and result.get("status") == "ok":
+                _track_append_fresh_view(messages, turn_log)
             if result.get("status") in ("error", "timeout", "failed") or result.get("success") is False:
+                if "changed mid-turn" in str(result.get("error", "")):
+                    error_result = name + " failed: " + json.dumps(result, default=str)
+                    break
+                if name in RETRYABLE_READ_TOOLS:
+                    continue
                 error_result = name + " failed: " + json.dumps(result, default=str)
                 break
         if error_result:
+            if turn_status == "completed":
+                turn_status = "error-halt"
             answer = error_result + "\nStopped without requesting further actions."
             break
     else:
-        answer = "Stopped at the eight-round safety limit. Review the last tool results before continuing."
+        summary = _summarize_turn(messages)
+        turn_status = "round-budget-exhausted"
+        if summary:
+            answer = summary + "\n\n(Round budget exhausted. Progress preserved; say 'continue' to resume.)"
+        else:
+            answer = "Stopped at the eight-round safety limit. Review the last tool results before continuing."
 
     history.append({"role": "user", "content": question})
-    history.append({"role": "assistant", "content": answer})
+    history.append({"role": "assistant", "content": answer + "\n\n" + build_outcome(turn_log, turn_status)})
+    try:
+        _write_turn_checkpoint(active_project, turn_status, round_number + 1,
+                               tool_count, turn_log)
+    except Exception as error:
+        print("Checkpoint skipped (in-memory outcome preserved):", error)
     return answer
 
 
 if __name__ == "__main__":
     print("MOON MAN AI â€” LIVE VISION + MEMORY")
-    print("Commands: remember SUBJECT: FACT | recall SUBJECT | exit")
+    print("Commands: remember SUBJECT: FACT | recall SUBJECT | paste an image path to share a picture | exit")
 
     while True:
         try:

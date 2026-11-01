@@ -1,0 +1,25 @@
+{
+  "owned": [
+    "E2E1",
+    "PAN_AXIS_PIN",
+    "PAN_BASE",
+    "PAN_EAR_L",
+    "PAN_EAR_R",
+    "PAN_PLATTER",
+    "PAN_SERVO_BODY",
+    "PAN_TRAY_L",
+    "PAN_TRAY_R",
+    "PIVOT_STUB_L",
+    "PIVOT_STUB_R",
+    "PLATTER",
+    "TILT",
+    "TILT_AXIS_PIN",
+    "TILT_AXIS_PIN (1)",
+    "TILT_SERVO_BODY",
+    "YOKE_ARM_L",
+    "YOKE_ARM_R",
+    "YOKE_NEW_L",
+    "YOKE_NEW_R",
+    "moonblock"
+  ]
+}

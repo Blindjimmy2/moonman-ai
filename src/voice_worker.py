@@ -1,31 +1,52 @@
-"""Persistent Pocket TTS playback worker for Moon Man (Windows)."""
+"""Persistent streaming Pocket TTS worker for Moon Man (Windows)."""
 import sys
-import winsound
-from pathlib import Path
-
+import re
 import numpy as np
-from scipy.io.wavfile import write
+import sounddevice as sd
 from pocket_tts import TTSModel
 
 VOICE = "stuart_bell"
-OUTPUT = Path(__file__).with_name("moonman_pocket.wav")
+
+
+def clean_speech(text):
+    # Remove code blocks and inline code formatting.
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"`([^`]*)`", r"\\1", text)
+
+    # Remove Markdown formatting.
+    text = re.sub(r"\\*\\*|__|(?<!\\w)\\*(?!\\s)", "", text)
+    text = re.sub(r"(?m)^\\s*[-*]\\s+", "", text)
+    text = re.sub(r"(?m)^\\s*#+\\s*", "", text)
+
+    # Collapse whitespace.
+    return " ".join(text.split())
 
 
 def main():
     print("Loading Moon Man's Pocket TTS voice...", file=sys.stderr, flush=True)
+
     model = TTSModel.load_model()
     voice = model.get_state_for_audio_prompt(VOICE)
-    print("Moon Man's voice is ready.", file=sys.stderr, flush=True)
+
+    print("Moon Man's streaming voice is ready.", file=sys.stderr, flush=True)
 
     for line in sys.stdin:
-        text = line.strip()
+        text = clean_speech(line.strip())
         if not text:
             continue
+
         try:
-            audio = model.generate_audio(voice, text)
-            pcm = (np.clip(audio.detach().cpu().numpy(), -1, 1) * 32767).astype(np.int16)
-            write(str(OUTPUT), model.sample_rate, pcm)
-            winsound.PlaySound(str(OUTPUT), winsound.SND_FILENAME)
+            with sd.OutputStream(
+                samplerate=model.sample_rate,
+                channels=1,
+                dtype="float32"
+            ) as stream:
+                for chunk in model.generate_audio_stream(voice, text):
+                    samples = chunk.detach().cpu().numpy()
+                    samples = np.asarray(samples, dtype=np.float32).reshape(-1, 1)
+                    if samples.size:
+                        stream.write(samples)
+
         except Exception as error:
             print(f"Voice error: {error}", file=sys.stderr, flush=True)
 

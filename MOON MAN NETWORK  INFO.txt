@@ -1,0 +1,82 @@
+CURRENT MOON MAN NETWORK / BODY BOARD STATUS
+
+Moon Man Pi is now acting as router + MQTT broker + website host.
+
+Network:
+- Home WiFi / upstream internet: wlan0
+- MoonMan private WiFi hotspot: wlan1
+- MoonMan SSID: MoonMan
+- MoonMan password: moonman1234
+- Pi/MQTT IP on MoonMan network: 10.42.0.1
+- Body ESP32 IP: 10.42.0.80
+- Home network Pi IP: 192.168.1.11
+
+Website control path is confirmed working:
+Website → Pi/MQTT broker at 10.42.0.1 → MoonMan WiFi → Body ESP32 → outputs
+
+Current body board pin map:
+- Helmet servo: GPIO 27
+- Visor servo: GPIO 18
+- Dome LED: GPIO 19
+- Blue LED: GPIO 23
+- UV LED: GPIO 25
+- Body fan: GPIO 26
+- Sled LED: GPIO 32
+- Sled fan: GPIO 33
+- Mister output: GPIO 14
+
+Body board WiFi/MQTT config:
+const char* ssid = "MoonMan";
+const char* password = "moonman1234";
+const char* mqtt_server = "10.42.0.1";
+const int mqtt_port = 1883;
+
+Website needs to add/update controls for:
+- Body fan
+- Sled fan
+- Sled LED
+- Mister
+
+MQTT topics to use:
+- moonman/fan/speed              payload 0-255
+- moonman/sled/fan/speed         payload 0-255
+- moonman/sled/led/brightness    payload 0-255
+- moonman/mister/on              payload 1 or 0
+
+Existing topics that should stay:
+- moonman/helmet                 angle / left / center / right
+- moonman/visor                  angle / open / close
+- moonman/dome/brightness        payload 0-255
+- moonman/blue/brightness        payload 0-255
+- moonman/uv/brightness          payload 0-255
+
+Suggested website layout:
+LIGHTING PAGE:
+- Dome LED slider
+- Blue LED slider
+- UV LED slider
+- Sled LED slider
+
+SERVOS PAGE:
+- Helmet left / center / right
+- Helmet angle slider
+- Visor open / close
+- Visor angle slider
+
+SYSTEM / SLED PAGE:
+- Body fan slider
+- Sled fan slider
+- Mister ON/OFF button
+- Status indicators:
+  Body online
+  Display online
+  MQTT online
+  MoonMan WiFi active
+
+STATS / MINING PAGE:
+- Pi CPU temp
+- RAM
+- Uptime
+- Home IP: 192.168.1.11
+- MoonMan IP: 10.42.0.1
+- Body IP: 10.42.0.80
