@@ -384,114 +384,259 @@ def mqtt_thread():
 
 
 PAGE = r"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>MoonMan Mission Control</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moon Man Mission Control | Operation Moonworks</title>
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-body{background:#070b16;color:#d7e3ff;font-family:Consolas,monospace;margin:0}
-.wrap{max-width:1100px;margin:0 auto;padding:18px}
-h1{font-size:20px;letter-spacing:2px;color:#7fd4ff;margin:0}
-.sub{color:#5b6b8c;font-size:12px;margin:2px 0 14px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.card{background:#0d1428;border:1px solid #1d2a4d;border-radius:8px;padding:12px}
-.card h2{font-size:14px;margin:0 0 6px;color:#a9c6ff}
-.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
-.on{background:#3dff8e}.off{background:#ff5470}.warn{background:#ffb347}
-.meta{font-size:12px;color:#8fa3cc;min-height:18px}
-pre{background:#05070f;border:1px solid #182449;border-radius:6px;height:130px;
-overflow:auto;font-size:11px;padding:6px;color:#9fe8c0;margin:8px 0}
-button{background:#16305c;color:#d7e3ff;border:1px solid #2c4d85;border-radius:5px;
-padding:4px 12px;margin-right:6px;cursor:pointer;font-family:inherit}
-button:hover{background:#1e4179}
-input[type=text]{width:65%;background:#05070f;color:#d7e3ff;border:1px solid #2c4d85;
-border-radius:5px;padding:5px 8px;font-family:inherit}
-.panel{background:#0d1428;border:1px solid #1d2a4d;border-radius:8px;
-padding:12px;margin-top:12px}
-.bar{height:10px;background:#182449;border-radius:5px;margin:4px 0 8px}
-.bar>i{display:block;height:100%;background:#7fd4ff;border-radius:5px}
-img.cam{width:100%;max-width:640px;border:1px solid #1d2a4d;border-radius:6px}
-.foot{color:#5b6b8c;font-size:11px;margin-top:14px}
-</style></head><body><div class="wrap">
-<h1>OPERATION MOONWORKS &mdash; MISSION CONTROL</h1>
-<div class="sub">localhost only &middot; manages this dashboard's own services</div>
-<div class="grid" id="svcs"></div>
-<div class="panel"><h2 style="font-size:14px;color:#a9c6ff;margin:0 0 6px">TRACKER</h2>
-<div class="meta" id="trk"></div>
-<div class="meta">PAN</div><div class="bar"><i id="panb"></i></div>
-<div class="meta">TILT</div><div class="bar"><i id="tiltb"></i></div>
-<div class="meta" id="fcs"></div></div>
-<div class="panel"><h2 style="font-size:14px;color:#a9c6ff;margin:0 0 6px">MICROPHONE</h2>
-<div class="meta" id="mic"></div><div class="meta" id="micev"></div></div>
-<div class="panel"><h2 style="font-size:14px;color:#a9c6ff;margin:0 0 6px">HELMET CAM</h2>
-<img class="cam" src="__CAM__" onerror="this.outerHTML='<div class=meta>camera unreachable</div>'"></div>
-<div class="panel"><h2 style="font-size:14px;color:#a9c6ff;margin:0 0 6px">TALK TO MOONMAN</h2>
-<div><input type="text" id="askbox" placeholder="Type to MoonMan, Enter to send">
-<label class="meta"><input type="checkbox" id="saychk" checked> speak reply on eye</label>
-<button onclick="ask()">Send</button></div>
-<div class="meta" id="thinking"></div><div id="hist"></div></div>
-<div class="foot"><button onclick="stopAll()">Stop All Services</button>
-<span id="clk"></span></div></div>
-<script>
-const NAMES=["brain","voice","track","view"];
-async function api(p){const r=await fetch(p,{method:"POST"});return r.json();}
-async function refresh(){
- const s=await (await fetch("/api/services")).json();
- const c=document.getElementById("svcs");c.innerHTML="";
- for(const v of s){
-  const d=document.createElement("div");d.className="card";
-  const cls=v.running?"on":(v.orphan_pid?"warn":"off");
-  const st=v.running?("RUNNING pid="+v.pid+" up="+v.uptime_s+"s")
-    :(v.orphan_pid?("ORPHAN pid="+v.orphan_pid):"STOPPED");
-  d.innerHTML="<h2>"+v.label+"</h2><div class=meta><span class='dot "+cls+"'></span>"+st+"</div>"
-   +"<pre id='log-"+v.name+"'></pre>"
-   +"<button onclick=\"ctl('start','"+v.name+"')\">Start</button>"
-   +"<button onclick=\"ctl('stop','"+v.name+"')\">Stop</button>"
-   +"<button onclick=\"ctl('restart','"+v.name+"')\">Restart</button>";
-  c.appendChild(d);
-  const l=await (await fetch("/api/logs?name="+v.name)).json();
-  document.getElementById("log-"+v.name).textContent=l.lines.join("\n");
- }
- const t=await (await fetch("/api/state")).json();
- const trk=document.getElementById("trk"),fcs=document.getElementById("fcs");
- if(t.track&&t.track_age<3){
-  trk.textContent="mode="+t.track.mode+" pan="+t.track.pan+" tilt="+t.track.tilt;
-  document.getElementById("panb").style.width=(t.track.pan/180*100)+"%";
-  const tl=(t.track.tilt-45)/90*100;
-  document.getElementById("tiltb").style.width=Math.min(100,Math.max(0,tl))+"%";
- }else{trk.textContent="tracker offline";}
- const mc=document.getElementById("mic"),me=document.getElementById("micev");
- const dot=t.mic.state==="Listening"?"on":(t.mic.state==="Processing"?"warn":"off");
- mc.innerHTML="<span class='dot "+dot+"'></span>MIC: "+t.mic.state+" ("+t.mic.detail+")";
- const ev=t.mic.event||{};
- me.textContent="last: "+(ev.event||"none")+(t.mic.age!=null?" "+t.mic.age+"s ago":"")
-  +(ev.text?" heard="+ev.text:"")+(ev.src?" src="+ev.src:"")+(ev.kind?" reply="+ev.kind:"")
-  +(ev.status?" "+ev.status:"")+" ear="+(t.mic.ear||"never seen");
- if(t.faces&&t.faces_age<3){
-  fcs.textContent="faces="+t.faces.count+" conf="+t.faces.conf+" fps="+t.faces.fps;
- }else{fcs.textContent="face data: none (preview publishes while running)";}
- document.getElementById("clk").textContent=new Date().toLocaleTimeString();
+:root{
+  --bg:#07090d; --panel:#10141d; --panel-2:#151b26;
+  --line:rgba(255,255,255,.12); --text:#f4f7fb; --muted:#9ea9b8;
+  --blue:#1ca7ff; --cyan:#5ee7ff; --orange:#ff7a18;
+  --ok:#64f4b0; --err:#ff8b8b; --max:1180px;
 }
-async function ctl(a,n){await api("/api/"+a+"?name="+n);refresh();}
-async function stopAll(){await api("/api/stopall");refresh();}
-const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;");
+*{box-sizing:border-box}
+body{
+  margin:0; color:var(--text);
+  background:
+    radial-gradient(circle at 80% 5%, rgba(28,167,255,.13), transparent 30%),
+    radial-gradient(circle at 10% 25%, rgba(255,122,24,.08), transparent 22%),
+    var(--bg);
+  font-family:Inter,system-ui,sans-serif; line-height:1.6;
+}
+.noise{position:fixed;inset:0;pointer-events:none;opacity:.035;z-index:20;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E");}
+.site-header{position:sticky;top:0;z-index:15;display:flex;align-items:center;justify-content:space-between;
+  gap:16px;padding:14px max(24px,calc((100vw - var(--max))/2));
+  background:rgba(7,9,13,.78);backdrop-filter:blur(18px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:12px}
+.header-logo{width:58px;height:58px;object-fit:contain;flex:0 0 auto;
+  filter:drop-shadow(0 0 14px rgba(28,167,255,.3))}
+.brand strong{display:block;font-family:Orbitron,sans-serif;font-size:14px;letter-spacing:.08em}
+.brand small{display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.head-right{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:13px}
+main{max-width:var(--max);margin:0 auto;padding:44px 24px 30px}
+.eyebrow{color:var(--cyan);font-size:12px;font-weight:700;letter-spacing:.22em;margin:0 0 8px}
+h1{margin:0 0 6px;font-family:Orbitron,sans-serif;font-size:clamp(26px,3.4vw,40px);letter-spacing:-.025em;line-height:1.12}
+.sub{color:var(--muted);font-size:14px;margin:0 0 28px}
+.work-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.span2{grid-column:1/-1}
+.panel{padding:24px;border:1px solid var(--line);border-radius:16px;
+  background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.018))}
+.panel.featured{border-color:rgba(94,231,255,.45);box-shadow:0 0 45px rgba(28,167,255,.09)}
+.panel h2{margin:0 0 12px;font-family:Orbitron,sans-serif;font-size:15px;letter-spacing:.12em}
+.panel h2 .tag{margin-left:10px;vertical-align:2px}
+.meta{color:var(--muted);font-size:13px}
+.meta b,.meta strong{color:var(--text)}
+.tag{display:inline-block;padding:5px 10px;border:1px solid var(--line);border-radius:999px;
+  color:#c8d1dd;font-size:11px;letter-spacing:.06em}
+.button{display:inline-flex;justify-content:center;align-items:center;min-height:48px;padding:0 22px;
+  border-radius:8px;font-weight:700;border:1px solid transparent;cursor:pointer;font-family:inherit;font-size:14px}
+.button-primary{color:#031019;background:linear-gradient(135deg,var(--cyan),var(--blue));
+  box-shadow:0 10px 34px rgba(28,167,255,.24)}
+.button-secondary{border-color:var(--line);background:rgba(255,255,255,.04);color:var(--text)}
+.btn-sm{min-height:34px;padding:0 14px;font-size:13px;font-weight:600}
+.button:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+input[type=text]{width:100%;color:#fff;background:#090d14;border:1px solid var(--line);
+  border-radius:8px;padding:13px;font-family:inherit;font-size:14px}
+input[type=text]:focus{outline:1px solid var(--cyan);border-color:var(--cyan)}
+.talk-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.talk-row input[type=text]{flex:1;min-width:220px}
+.speak{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:13px;white-space:nowrap}
+#thinking{color:var(--cyan);font-size:13px;min-height:1.4em;margin:8px 0 0}
+#hist{margin-top:6px}
+#hist .chat{margin:0 0 12px;font-size:14px}
+#hist .who{display:block;font-size:10px;font-weight:700;letter-spacing:.16em;color:var(--muted);margin-bottom:2px}
+#hist .chat.a .who{color:var(--cyan)}
+.svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.svc{padding:16px;border:1px solid var(--line);border-radius:12px;background:rgba(7,9,13,.55)}
+.svc h3{margin:0 0 6px;font-size:15px}
+.svc .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px;vertical-align:1px}
+.dot.on{background:var(--cyan);box-shadow:0 0 12px rgba(94,231,255,.8)}
+.dot.ok{background:var(--ok);box-shadow:0 0 12px rgba(100,244,176,.7)}
+.dot.warn{background:var(--orange);box-shadow:0 0 12px rgba(255,122,24,.7)}
+.dot.off{background:#3a4356}
+.dot.err{background:var(--err);box-shadow:0 0 12px rgba(255,139,139,.7)}
+pre.log{background:#090d14;border:1px solid var(--line);border-radius:8px;max-height:130px;
+  overflow:auto;font-family:Consolas,monospace;font-size:11px;line-height:1.5;padding:8px;color:#9fe8c0;margin:10px 0 0}
+.bar{height:8px;background:var(--panel-2);border:1px solid var(--line);border-radius:999px;margin:4px 0 10px;overflow:hidden}
+.bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan));border-radius:999px}
+img.cam{width:100%;border:1px solid rgba(94,231,255,.3);border-radius:12px;background:#0a1119;display:block}
+.tstat{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+footer{padding:26px max(24px,calc((100vw - var(--max))/2));border-top:1px solid var(--line);
+  color:var(--muted);font-size:12px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+footer a{color:var(--cyan)}
+@media (max-width:900px){.work-grid,.svc-grid{grid-template-columns:1fr}.brand strong{font-size:11px}.header-logo{width:48px;height:48px}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+</style></head>
+<body>
+<div class="noise"></div>
+<header class="site-header">
+  <div class="brand">
+    <img class="header-logo" src="/assets/emblem.png" alt="" aria-hidden="true">
+    <span><strong>OPERATION MOONWORKS</strong><small>Moon Man Mission Control</small></span>
+  </div>
+  <div class="head-right"><span id="clk"></span>
+    <button class="button button-secondary btn-sm" onclick="stopAll()">Stop All Services</button>
+  </div>
+</header>
+<main>
+  <p class="eyebrow">AI ENGINEERING WORKSTATION</p>
+  <h1>Mission Control</h1>
+  <p class="sub">Localhost only &middot; manages this dashboard's own services</p>
+  <div class="work-grid">
+    <div class="panel featured span2"><h2>TALK TO MOONMAN</h2>
+      <div class="talk-row">
+        <input type="text" id="askbox" placeholder="Type to MoonMan, Enter to send">
+        <label class="speak"><input type="checkbox" id="saychk" checked> speak reply on eye</label>
+        <button class="button button-primary btn-sm" style="min-height:44px" onclick="ask()">Send</button>
+      </div>
+      <div id="thinking"></div><div id="hist"></div>
+    </div>
+    <div class="panel span2"><h2>SERVICES</h2><div class="svc-grid" id="svcs"></div></div>
+    <div class="panel"><h2>TRACKER</h2>
+      <div class="meta" id="trk"></div>
+      <div class="meta">PAN</div><div class="bar"><i id="panb"></i></div>
+      <div class="meta">TILT</div><div class="bar"><i id="tiltb"></i></div>
+      <div class="meta" id="fcs"></div>
+    </div>
+    <div class="panel"><h2>HELMET CAM</h2>
+      <img class="cam" src="__CAM__" onerror="this.outerHTML='<div class=meta>camera unreachable</div>'">
+    </div>
+    <div class="panel"><h2>MICROPHONE</h2>
+      <div class="meta" id="mic"></div><div class="meta" id="micev"></div>
+    </div>
+    <div class="panel"><h2>AI COST <span class="tag">META API</span></h2>
+      <div class="meta" id="cost"></div><div class="meta" id="costd"></div><div class="meta" id="costt"></div>
+    </div>
+    <div class="panel"><h2>ARCHIE PRINT <span class="tag">APPROVAL</span></h2>
+      <div class="meta" id="archie_info">loading...</div>
+      <div class="talk-row"><input type="text" id="archie_file" placeholder="plate_1.gcode">
+      <button class="button button-primary btn-sm" style="min-height:44px" onclick="approveArchie()">Approve</button></div>
+      <div class="meta" id="archie_msg"></div>
+    </div>
+  </div>
+</main>
+<footer><span>OPERATION MOONWORKS &middot; MOON MAN</span>
+<span>pricing: <a href="https://dev.meta.ai/docs/pricing-rate-limits">dev.meta.ai/docs/pricing-rate-limits</a></span></footer>
+<script>
+const NAMES=['brain','voice','track','view'];
+async function api(p){const r=await fetch(p,{method:'POST'});return r.json();}
+let svcNames='';
+const logCache={};
+function setLog(el,txt){
+ if(logCache[el.id]===txt)return;
+ logCache[el.id]=txt;
+ const pinned=el.scrollHeight-el.scrollTop-el.clientHeight<24;
+ el.textContent=txt;
+ if(pinned)el.scrollTop=el.scrollHeight;
+}
+async function refreshSvcs(){
+ const s=await (await fetch('/api/services')).json();
+ const names=s.map(v=>v.name).join(',');
+ const c=document.getElementById('svcs');
+ if(names!==svcNames){
+  svcNames=names;c.innerHTML='';
+  for(const v of s){
+   const d=document.createElement('div');d.className='svc';
+   d.innerHTML='<h3>'+v.label+'</h3><div class=meta><span class=\'dot off\' id=\'dot-'+v.name+'\'></span><span id=\'st-'+v.name+'\'></span></div>'
+    +'<pre class=log id=\'log-'+v.name+'\'></pre>'
+    +'<div class=row><button class=\'button button-secondary btn-sm\' onclick=\'ctl("start","'+v.name+'")\'>Start</button>'
+    +'<button class=\'button button-secondary btn-sm\' onclick=\'ctl("stop","'+v.name+'")\'>Stop</button>'
+    +'<button class=\'button button-secondary btn-sm\' onclick=\'ctl("restart","'+v.name+'")\'>Restart</button></div>';
+   c.appendChild(d);
+  }
+ }
+ for(const v of s){
+  const cls=v.running?'on':(v.orphan_pid?'warn':'off');
+  const st=v.running?('RUNNING pid='+v.pid+' up='+v.uptime_s+'s')
+    :(v.orphan_pid?('ORPHAN pid='+v.orphan_pid):'STOPPED');
+  const dot=document.getElementById('dot-'+v.name),stEl=document.getElementById('st-'+v.name);
+  if(dot&&stEl){dot.className='dot '+cls;if(stEl.textContent!==st)stEl.textContent=st;}
+  const l=await (await fetch('/api/logs?name='+v.name)).json();
+  const logEl=document.getElementById('log-'+v.name);
+  if(logEl)setLog(logEl,l.lines.join('\n'));
+ }
+}
+async function refreshArchie(){
+ try{
+  const a=await (await fetch('/api/archie/status')).json();
+  const el=document.getElementById('archie_info');
+  if(a.record){el.textContent=a.record.printer+' '+a.record.filename+' job '+a.record.job_id+' ['+a.record.status+']'+(a.expires_in!=null?' expires ~'+a.expires_in+'s':'');}
+  else{el.textContent=a.text||'No Archie file staged.';}
+ }catch(e){document.getElementById('archie_info').textContent='approval state unavailable';}
+}
+async function approveArchie(){
+ const f=document.getElementById('archie_file').value.trim();
+ const m=document.getElementById('archie_msg');
+ if(!f){m.textContent='Type the staged filename first.';return;}
+ m.textContent='approving...';
+ try{
+  const r=await fetch('/api/archie/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f})});
+  const j=await r.json();
+  m.textContent=j.message||j.error||'(no response)';
+ }catch(e){m.textContent='(request failed)';}
+ refreshArchie();
+}
+async function refresh(){
+ const t=await (await fetch('/api/state')).json();
+ const trk=document.getElementById('trk'),fcs=document.getElementById('fcs');
+ if(t.track&&t.track_age<3){
+  trk.textContent='mode='+t.track.mode+' pan='+t.track.pan+' tilt='+t.track.tilt;
+  document.getElementById('panb').style.width=(t.track.pan/180*100)+'%';
+  const tl=(t.track.tilt-45)/90*100;
+  document.getElementById('tiltb').style.width=Math.min(100,Math.max(0,tl))+'%';
+ }else{trk.textContent='tracker offline';}
+ const mc=document.getElementById('mic'),me=document.getElementById('micev');
+ const dot=t.mic.state==='Listening'?'on':(t.mic.state==='Processing'?'warn':'off');
+ mc.innerHTML='<span class=\'dot '+dot+'\'></span>MIC: '+t.mic.state+' ('+t.mic.detail+')';
+ const ev=t.mic.event||{};
+ me.textContent='last: '+(ev.event||'none')+(t.mic.age!=null?' '+t.mic.age+'s ago':'')
+  +(ev.text?' heard='+ev.text:'')+(ev.src?' src='+ev.src:'')+(ev.kind?' reply='+ev.kind:'')
+  +(ev.status?' '+ev.status:'')+' ear='+(t.mic.ear||'never seen');
+ if(t.faces&&t.faces_age<3){
+  fcs.textContent='faces='+t.faces.count+' conf='+t.faces.conf+' fps='+t.faces.fps;
+ }else{fcs.textContent='face data: none (preview publishes while running)';}
+ const c8=await (await fetch('/api/costs')).json();
+ const ce=document.getElementById('cost'),cd=document.getElementById('costd'),ct=document.getElementById('costt');
+ if(c8.error){ce.textContent='costs unavailable: '+c8.error;cd.textContent='';ct.textContent='';}
+ else{
+  const L=c8.last||{};
+  let w='';
+  if(c8.budget_monthly_usd>0&&c8.month_usd>=c8.budget_monthly_usd*0.8){w=' BUDGET '+Math.round(c8.month_usd/c8.budget_monthly_usd*100)+'%';}
+  ce.textContent='last: '+(L.cost_usd!=null?('$'+L.cost_usd.toFixed(4)+' in='+L.input_tokens+' cached='+L.cached_tokens+' out='+L.output_tokens+(L.reasoning_tokens?' (think='+L.reasoning_tokens+')':'')+(L.searches?' searches='+L.searches:'')+(L.estimated?' EST':'')):'none yet')+' ['+c8.tier+']';
+  cd.textContent='today: $'+c8.today_usd.toFixed(4)+' ('+c8.today_calls+' calls, '+c8.today_measured+' measured)'+w;
+  ct.textContent='month: $'+c8.month_usd.toFixed(2)+' | est full month: $'+c8.est_month_usd.toFixed(2)+' (budget $'+(c8.budget_monthly_usd||'none')+')';
+ }
+ document.getElementById('clk').textContent=new Date().toLocaleTimeString();
+}
+async function ctl(a,n){await api('/api/'+a+'?name='+n);refreshSvcs();refresh();}
+async function stopAll(){await api('/api/stopall');refreshSvcs();refresh();}
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
 const hist=[];
 async function ask(){
- const box=document.getElementById("askbox"),t=box.value.trim();
- if(!t)return;box.value="";
- document.getElementById("thinking").textContent="thinking...";
+ const box=document.getElementById('askbox'),t=box.value.trim();
+ if(!t)return;box.value='';
+ document.getElementById('thinking').textContent='thinking...';
  try{
-  const r=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},
-   body:JSON.stringify({text:t,speak:document.getElementById("saychk").checked})});
+  const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({text:t,speak:document.getElementById('saychk').checked})});
   const j=await r.json();
-  hist.unshift({q:t,a:j.answer||("(no answer: "+(j.status||j.error)+")")});
- }catch(e){hist.unshift({q:t,a:"(request failed)"});}
- document.getElementById("thinking").textContent="";
- const h=document.getElementById("hist");h.innerHTML="";
+  hist.unshift({q:t,a:j.answer||('(no answer: '+(j.status||j.error)+')')});
+ }catch(e){hist.unshift({q:t,a:'(request failed)'});}
+ document.getElementById('thinking').textContent='';
+ const h=document.getElementById('hist');h.innerHTML='';
  for(const e of hist.slice(0,10)){
-  h.innerHTML+="<div class=meta>YOU: "+esc(e.q)+"</div><div class=meta>MOONMAN: "+esc(e.a)+"</div><br>";
+  h.innerHTML+='<div class=chat><span class=who>YOU</span>'+esc(e.q)+'</div><div class="chat a"><span class=who>MOONMAN</span>'+esc(e.a)+'</div>';
  }
 }
-refresh();setInterval(refresh,2000);
-document.getElementById("askbox").addEventListener("keydown",e=>{if(e.key==="Enter")ask();});
+refreshSvcs();refresh();refreshArchie();setInterval(refresh,2000);setInterval(refreshSvcs,6000);setInterval(refreshArchie,6000);
+document.getElementById('askbox').addEventListener('keydown',e=>{if(e.key==='Enter')ask();});
 </script></body></html>
+
 """
 
 
@@ -501,6 +646,24 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _asset(self, name, ctype):
+        try:
+            base = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "assets")
+            path = os.path.join(base, name)
+            if os.path.dirname(os.path.abspath(path)) != base:
+                return self._json({"error": "not found"}, 404)
+            with open(path, "rb") as handle:
+                body = handle.read()
+        except OSError:
+            return self._json({"error": "not found"}, 404)
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "max-age=3600")
         self.end_headers()
         self.wfile.write(body)
 
@@ -524,6 +687,28 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 self._json({"name": name,
                             "lines": list(_state[name]["logs"])[-120:]})
+        elif url.path == "/assets/emblem.png":
+            return self._asset("emblem.png", "image/png")
+        elif url.path == "/favicon.ico":
+            return self._asset("favicon.png", "image/png")
+        elif url.path == "/api/archie/status":
+            try:
+                from archie_approval import current as _arch_current
+                from archie_approval import describe as _arch_desc
+
+                record, expires = _arch_current()
+                self._json({"record": record, "expires_in": expires,
+                            "text": _arch_desc()})
+            except Exception as error:
+                self._json({"record": None, "expires_in": None,
+                            "text": "approval state unavailable: %s"
+                            % error})
+        elif url.path == "/api/costs":
+            try:
+                from moonman_usage import summary as _usage_summary
+                self._json(_usage_summary())
+            except Exception as error:
+                self._json({"error": "costs unavailable: %s" % error})
         elif url.path == "/api/state":
             now = time.time()
             self._json({"track": _mqtt["track"],
@@ -553,6 +738,25 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/api/stopall":
             stop_all()
             self._json({"ok": True})
+        elif url.path == "/api/archie/approve":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except Exception:
+                body = {}
+            filename = str(body.get("filename", "")).strip()
+            try:
+                from archie_approval import ApprovalError as _ArchErr
+                from archie_approval import approve as _arch_approve
+
+                message = _arch_approve(filename)
+                self._json({"ok": True, "message": message})
+            except _ArchErr as error:
+                self._json({"ok": False,
+                            "message": "Not approved: %s" % error})
+            except Exception as error:
+                self._json({"ok": False,
+                            "message": "approve failed: %s" % error})
         elif url.path == "/api/ask":
             try:
                 length = int(self.headers.get("Content-Length", "0"))

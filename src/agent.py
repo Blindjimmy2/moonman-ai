@@ -29,6 +29,14 @@ client = OpenAI(
     timeout=45.0,
 )
 
+# Moon Man usage telemetry (isolated; never affects answers).
+try:
+    from moonman_usage import new_task as _usage_new_task
+    from moonman_usage import record as _usage_record
+except Exception:
+    _usage_new_task = None
+    _usage_record = None
+
 SYSTEM_PROMPT = (
     "You are Moon Man, a sarcastic astronaut and engineering "
     "shop coworker. You believe you're an astronaut, not a robot. "
@@ -766,7 +774,9 @@ CAD_TOOLS.append({
         "description": (
             "Request physical printing of an existing G-code file on Archie. "
             "Use only after the user explicitly asks to print. "
-            "The tool requires a separate human approval in the local terminal. "
+            "Human approves in chat first by saying: START ARCHIE <filename>. "
+            "Until then this tool returns awaiting_approval and sends nothing. "
+            "Approvals are single-use and expire after 5 minutes. "
             "Never claim printing started until the printer status confirms it."
         ),
         "parameters": {
@@ -1058,7 +1068,7 @@ def _write_turn_checkpoint(project, status, rounds_used, calls_used, log):
     )
 
 
-def _summarize_turn(messages):
+def _summarize_turn(messages, task_id=""):
     try:
         prompt = (
             "Turn tool budget exhausted. Using ONLY the tool results above, write:\n"
@@ -1071,6 +1081,16 @@ def _summarize_turn(messages):
             messages=messages + [{"role": "user", "content": prompt}],
             tool_choice="none",
         )
+        if _usage_record:
+            try:
+                _usage_record(
+                    "chat.completions", "muse-spark-1.3",
+                    usage=getattr(response, "usage", None),
+                    task_id=task_id,
+                    note="summarize",
+                )
+            except Exception:
+                pass
         text = (response.choices[0].message.content or "").strip()
         return text[:1500] if text else None
     except Exception:
@@ -1269,8 +1289,25 @@ CAD_TOOLS.extend([
 ])
 
 def ask_moonman(question):
+    _usage_task = (
+        _usage_new_task("ask") if _usage_new_task else ""
+    )
     # Explicit approval for the pending, verified Marvin job.
     command = question.strip().lower()
+    if command.startswith("start archie"):
+        from archie_approval import ApprovalError, approve, describe
+
+        target = command[len("start archie"):].strip()
+        if not target:
+            return describe() + " Say: START ARCHIE <file.gcode>"
+        try:
+            return approve(target)
+        except ApprovalError as error:
+            return "Not approved: %s" % error
+    if command == "cancel archie":
+        from archie_approval import cancel
+
+        return cancel()
     if command in ("confirm print", "yes print", "yes print it", "yes, print it", "print it"):
         try:
             from print_approval import confirm_print
@@ -1278,7 +1315,11 @@ def ask_moonman(question):
             return ("Print start accepted by OctoPrint for the approved "
                     "Marvin job. Monitor the first layer.")
         except Exception as error:
-            return f"Print not started or start unconfirmed: {error}"
+            return (
+                f"Print not started or start unconfirmed: {error} "
+                "(That was the Marvin/Longer approval. "
+                "For Archie, say: START ARCHIE <file.gcode>.)"
+            )
 
     lower = question.lower().strip()
 
@@ -1462,6 +1503,16 @@ def ask_moonman(question):
         response = client.chat.completions.create(
             model="muse-spark-1.3", messages=messages,
             tools=CAD_TOOLS, tool_choice="auto")
+        if _usage_record:
+            try:
+                _usage_record(
+                    "chat.completions", "muse-spark-1.3",
+                    usage=getattr(response, "usage", None),
+                    task_id=_usage_task,
+                    note="round %d" % (round_number + 1),
+                )
+            except Exception:
+                pass
         message = response.choices[0].message
         calls = message.tool_calls or []
         if not calls:
@@ -1490,29 +1541,96 @@ def ask_moonman(question):
                     filename = args.get("filename", "")
                     from archie_start_print import build_start_command
                     command = build_start_command(filename)
+                    from archie_approval import (
+                        ApprovalError as _ArchieApprovalError,
+                        consume as _archie_consume,
+                        printer_idle as _archie_idle,
+                        remote_file_ok as _archie_file_ok,
+                        verify_local as _archie_verify_local,
+                        confirm_start as _archie_confirm,
+                    )
 
                     print("\n" + "=" * 55, flush=True)
-                    print("MOON MAN REQUESTS PERMISSION TO START ARCHIE", flush=True)
+                    print("MOON MAN ARCHIE START REQUEST", flush=True)
                     print("FILE:", filename, flush=True)
                     print("COMMAND:", command["params"]["opGcodeFile"], flush=True)
-                    print("WARNING: Approval will physically start the printer.", flush=True)
                     print("=" * 55, flush=True)
 
-                    approval = input(
-                        "TYPE START ARCHIE TO AUTHORIZE (anything else cancels): "
-                    ).strip()
-
-                    if approval == "START ARCHIE":
-                        result = _archie_start_print(filename, approved=True)
-                    else:
+                    idle, idle_reason, snapshot = _archie_idle()
+                    if not idle:
                         result = {
-                            "status": "cancelled",
+                            "status": "refused_not_ready",
                             "printer": "Archie",
                             "filename": filename,
-                            "message": "Human did not approve print start."
+                            "reason": idle_reason,
+                            "printer_state": snapshot,
                         }
+                    else:
+                        try:
+                            approval = _archie_consume(filename)
+                        except _ArchieApprovalError as approval_error:
+                            result = {
+                                "status": "awaiting_approval",
+                                "printer": "Archie",
+                                "filename": filename,
+                                "message": str(approval_error),
+                            }
+                        else:
+                            if not _archie_file_ok(
+                                approval["filename"], approval["size"]
+                            ):
+                                result = {
+                                    "status": "refused_file_missing",
+                                    "printer": "Archie",
+                                    "filename": filename,
+                                    "message": (
+                                        "Staged file no longer on Archie. "
+                                        "Re-upload, then re-approve."
+                                    ),
+                                }
+                            else:
+                                local_ok, local_reason = (
+                                    _archie_verify_local(approval)
+                                )
+                                if not local_ok:
+                                    result = {
+                                        "status": "refused_hash_mismatch",
+                                        "printer": "Archie",
+                                        "filename": filename,
+                                        "message": local_reason,
+                                    }
+                                else:
+                                    result = _archie_start_print(
+                                        filename, approved=True
+                                    )
+                                    result["approval"] = "consumed single-use"
+                                    result["idle_check"] = idle_reason
+                                    result["confirmation"] = _archie_confirm(
+                                        approval["filename"]
+                                    )
+                    print("ARCHIE START RESULT:", result.get("status"), flush=True)
                 elif name == "archie_upload_gcode":
                     result = archie_upload_gcode(args.get("gcode_path", ""))
+                    if (
+                        isinstance(result, dict)
+                        and result.get("status") == "uploaded_verified_not_printing"
+                    ):
+                        try:
+                            from archie_approval import pend as _archie_pend
+
+                            _archie_pend(
+                                result.get("filename", ""),
+                                result.get("sha256_local", ""),
+                                result.get("bytes", 0),
+                                args.get("gcode_path", ""),
+                            )
+                            print(
+                                "ARCHIE staged; say START ARCHIE %s to approve."
+                                % result.get("filename", ""),
+                                flush=True,
+                            )
+                        except Exception as pend_error:
+                            print("ARCHIE stage record failed:", pend_error, flush=True)
                 elif name == "archie_status":
                     result = archie_status()
                 elif name == "prepare_archie_print":
@@ -1629,7 +1747,7 @@ def ask_moonman(question):
             answer = error_result + "\nStopped without requesting further actions."
             break
     else:
-        summary = _summarize_turn(messages)
+        summary = _summarize_turn(messages, task_id=_usage_task)
         turn_status = "round-budget-exhausted"
         if summary:
             answer = summary + "\n\n(Round budget exhausted. Progress preserved; say 'continue' to resume.)"

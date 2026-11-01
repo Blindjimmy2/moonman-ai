@@ -11,6 +11,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
+# Moon Man usage telemetry (isolated; never affects answers).
+try:
+    from moonman_usage import record as _usage_record
+except Exception:
+    _usage_record = None
+
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
@@ -98,6 +104,16 @@ def _parse(query, response):
             cite["cited_text"] = answer[start:end]
         unique.append(cite)
 
+    if _usage_record:
+        try:
+            _usage_record(
+                "responses", MODEL,
+                usage=getattr(response, "usage", None),
+                searches=1 if saw_search_call else 0,
+                note="web_research",
+            )
+        except Exception:
+            pass
     return {
         "status": "ok" if saw_search_call else "ungrounded",
         "query": query,

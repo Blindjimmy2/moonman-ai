@@ -135,3 +135,22 @@ def format_human_prompt(plan: dict) -> str:
 if __name__ == "__main__":
     print(f"Moon Man {ARCHIE_PRINTER}-only v0.5 loaded. DRY_RUN={DRY_RUN}")
     print(describe_verified_transport())
+
+
+# UPDATE 2026-11-01 (human-approved, tested offline): the "touchscreen-only,
+# never call archie_start_print" rule above is SUPERSEDED. Archie starts now
+# go through the chat/dashboard approval flow in src/archie_approval.py:
+# upload-verified file -> human says START ARCHIE <file> (or dashboard
+# Approve) -> tool re-checks idle + hash + remote file, sends once, polls
+# for start confirmation. Approvals are single-use, 5-minute expiry.
+# NEVER auto-start is still in force: no approval, no send.
+
+# VERIFIED LIVE 2026-11-01: first remote start succeeded (collar
+# plate_1.gcode, job arch-6d67b546, via chat approval + single-use
+# consume). Payload: ws://192.168.1.10:9999
+# {"method":"set","params":{"opGcodeFile":"printprt:/usr/data/
+# printer_data/gcodes/<file>","enableSelfTest":1}}.
+# Observed live (NOT from docs): state 2 = idle, state 1 = busy.
+# Start evidence: status showed plate_1.gcode, progress 0, nozzle/bed
+# heating, errcode 0. Flow: src/archie_approval.py (idle + local-hash
+# + remote-file re-checks, confirm_start poll). Completion: progress 0% on /usr/data/printer_data/gcodes/plate_1.gcode at note time.
