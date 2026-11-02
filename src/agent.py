@@ -677,6 +677,24 @@ MOONMAN_TRACK_TOOLS = [
                 "additionalProperties": False
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "visor",
+            "description": (
+                "Open or close Moon Man's helmet visor. action must be "
+                "exactly open or close. Use for 'open/close your visor'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"}
+                },
+                "required": ["action"],
+                "additionalProperties": False
+            }
+        }
     }
 ]
 CAD_TOOLS.extend(MOONMAN_TRACK_TOOLS)
@@ -1721,6 +1739,19 @@ def ask_moonman(question):
                     result = {"status": "ok", **gaze} if gaze else \
                         {"status": "unavailable",
                          "message": "tracker unreachable (is moonman_track.py running?)"}
+                elif name == "visor":
+                    action = str(args.get("action", "")).strip().lower()
+                    if action not in ("open", "close"):
+                        result = {"status": "error",
+                                  "error": "action must be open|close"}
+                    else:
+                        ok = _track_pub("moonman/visor", action)
+                        if ok:
+                            result = {"status": "ok",
+                                      "message": "visor " + ("closed" if action == "close" else "open")}
+                        else:
+                            result = {"status": "unavailable",
+                                      "message": "eye unreachable (is the right eye online?)"}
                 else:
                     raise ValueError("Unknown tool: " + name)
                 if not isinstance(result, dict):

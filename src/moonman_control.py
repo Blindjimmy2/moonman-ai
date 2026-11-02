@@ -24,6 +24,7 @@ Test port: MOONMAN_CONTROL_PORT=18100
 
 import atexit
 import collections
+import ctypes.wintypes
 import json
 import os
 import socket
@@ -45,6 +46,45 @@ VOICE_DIR = r"C:\Users\twill\Documents\MoonMan"
 VOICE_PY = os.path.join(VOICE_DIR, ".venv", "Scripts", "python.exe")
 PIDDIR = os.path.join(os.environ.get("TEMP", HERE), "moonman-ctl")
 LOG_KEEP = 300
+
+STARTED_AT = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+
+def _packed_ref(dotgit, ref):
+    try:
+        with open(os.path.join(dotgit, "packed-refs")) as handle:
+            for line in handle:
+                if line.rstrip("\n").endswith(" " + ref):
+                    return line.split(" ", 1)[0].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _git_hash():
+    """Short commit hash + branch for the footer. Never raises."""
+    try:
+        dotgit = os.path.join(os.path.dirname(HERE), ".git")
+        with open(os.path.join(dotgit, "HEAD")) as handle:
+            head = handle.read().strip()
+        branch, full = "", ""
+        if head.startswith("ref:"):
+            ref = head.split(" ", 1)[1].strip()
+            branch = ref.split("/")[-1]
+            try:
+                with open(os.path.join(dotgit, *ref.split("/"))) as handle:
+                    full = handle.read().strip()
+            except OSError:
+                full = _packed_ref(dotgit, ref)
+        else:
+            full = head
+        if len(full) < 7 or any(
+                c not in "0123456789abcdef" for c in full[:40]):
+            return "unknown"
+        short = full[:7]
+        return "%s@%s" % (branch, short) if branch else short
+    except Exception:
+        return "unknown"
 
 SERVICES = {
     "brain": {"label": "Brain (MQTT bridge)",
@@ -76,8 +116,78 @@ def _pidfile(name):
     return os.path.join(PIDDIR, "moonman-ctl-%s.pid" % name)
 
 
-def _pid_alive(pid):
+_STILL_ACTIVE = 259
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_ERROR_INVALID_PARAMETER = 87
+
+if hasattr(ctypes, "windll"):
+    _K32 = ctypes.windll.kernel32
+    _K32.OpenProcess.argtypes = [ctypes.wintypes.DWORD,
+                                 ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
+    _K32.OpenProcess.restype = ctypes.wintypes.HANDLE
+    _K32.GetExitCodeProcess.argtypes = [
+        ctypes.wintypes.HANDLE, ctypes.POINTER(ctypes.wintypes.DWORD)]
+    _K32.GetExitCodeProcess.restype = ctypes.wintypes.BOOL
+    _K32.GetProcessTimes.argtypes = [ctypes.wintypes.HANDLE] + \
+        [ctypes.POINTER(ctypes.wintypes.FILETIME)] * 4
+    _K32.GetProcessTimes.restype = ctypes.wintypes.BOOL
+    _K32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+    _K32.CloseHandle.restype = ctypes.wintypes.BOOL
+    _K32.GetLastError.argtypes = []
+    _K32.GetLastError.restype = ctypes.wintypes.DWORD
+else:
+    _K32 = None
+
+
+def _pid_create_time(pid):
+    """Process creation time as epoch seconds. None when unknown."""
+    if _K32 is None:
+        return None
     try:
+        handle = _K32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION,
+                                  False, pid)
+        if not handle:
+            return None
+        try:
+            created = ctypes.wintypes.FILETIME()
+            dummy = ctypes.wintypes.FILETIME()
+            ok = _K32.GetProcessTimes(
+                handle, ctypes.byref(created), ctypes.byref(dummy),
+                ctypes.byref(dummy), ctypes.byref(dummy))
+            if not ok:
+                return None
+            ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+            return ticks / 10000000.0 - 11644473600.0
+        finally:
+            _K32.CloseHandle(handle)
+    except Exception:
+        return None
+
+
+def _pid_alive(pid):
+    """True only if the process exists AND is still running.
+
+    os.kill(pid, 0) alone lies on Windows: it succeeds for a
+    terminated process while any handle to it stays open (including
+    our own unreaped Popen object), which wedged crashed services as
+    permanent phantom orphans blocking their own restart. The exit
+    code is the truth: STILL_ACTIVE means running. Fail closed: a
+    process we cannot query (access denied) counts as alive so we
+    never double-start over it.
+    """
+    try:
+        if _K32 is not None:
+            handle = _K32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION,
+                                      False, pid)
+            if not handle:
+                return _K32.GetLastError() != _ERROR_INVALID_PARAMETER
+            try:
+                code = ctypes.wintypes.DWORD()
+                if not _K32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return True  # unqueryable: fail closed
+                return code.value == _STILL_ACTIVE
+            finally:
+                _K32.CloseHandle(handle)
         os.kill(pid, 0)
     except OSError:
         return False
@@ -87,16 +197,26 @@ def _pid_alive(pid):
 def _pidfile_pid(name):
     try:
         with open(_pidfile(name)) as f:
-            pid = int(f.read().strip())
+            parts = f.read().strip().split()
+            pid = int(parts[0])
+            born = float(parts[1]) if len(parts) > 1 else None
     except Exception:
         return None
-    if _pid_alive(pid):
-        return pid
-    try:
-        os.remove(_pidfile(name))  # stale: process is gone
-    except Exception:
-        pass
-    return None
+    if not _pid_alive(pid):
+        try:
+            os.remove(_pidfile(name))  # stale: process is gone
+        except Exception:
+            pass
+        return None
+    if born is not None:
+        actual = _pid_create_time(pid)
+        if actual is not None and abs(actual - born) > 5.0:
+            try:
+                os.remove(_pidfile(name))  # stale: PID recycled
+            except Exception:
+                pass
+            return None
+    return pid
 
 
 def _port_busy(port):
@@ -162,7 +282,7 @@ def svc_start(name):
         st["logs"].append("[started pid=%d]" % proc.pid)
         try:
             with open(_pidfile(name), "w") as f:
-                f.write(str(proc.pid))
+                f.write("%d %.3f" % (proc.pid, st["started"]))
         except Exception:
             pass
         threading.Thread(target=_reader, args=(name, proc),
@@ -229,6 +349,11 @@ def stop_all():
                 _stop_locked(name)
         except Exception:
             pass
+
+
+def start_all():
+    """Staggered background start of every service (Start All button)."""
+    threading.Thread(target=_autostart, daemon=True).start()
 
 
 def ask_agent(text, timeout=60.0):
@@ -430,6 +555,7 @@ h1{margin:0 0 6px;font-family:Orbitron,sans-serif;font-size:clamp(26px,3.4vw,40p
 .panel h2 .tag{margin-left:10px;vertical-align:2px}
 .meta{color:var(--muted);font-size:13px}
 .meta b,.meta strong{color:var(--text)}
+.urgent{color:var(--err);font-weight:700}
 .tag{display:inline-block;padding:5px 10px;border:1px solid var(--line);border-radius:999px;
   color:#c8d1dd;font-size:11px;letter-spacing:.06em}
 .button{display:inline-flex;justify-content:center;align-items:center;min-height:48px;padding:0 22px;
@@ -442,6 +568,7 @@ h1{margin:0 0 6px;font-family:Orbitron,sans-serif;font-size:clamp(26px,3.4vw,40p
 input[type=text]{width:100%;color:#fff;background:#090d14;border:1px solid var(--line);
   border-radius:8px;padding:13px;font-family:inherit;font-size:14px}
 input[type=text]:focus{outline:1px solid var(--cyan);border-color:var(--cyan)}
+input[type=range]{width:100%;accent-color:var(--cyan)}
 .talk-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px}
 .talk-row input[type=text]{flex:1;min-width:220px}
 .speak{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:13px;white-space:nowrap}
@@ -451,7 +578,7 @@ input[type=text]:focus{outline:1px solid var(--cyan);border-color:var(--cyan)}
 #hist .who{display:block;font-size:10px;font-weight:700;letter-spacing:.16em;color:var(--muted);margin-bottom:2px}
 #hist .chat.a .who{color:var(--cyan)}
 .svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.svc{padding:16px;border:1px solid var(--line);border-radius:12px;background:rgba(7,9,13,.55)}
+.svc{padding:16px;border:1px solid var(--line);border-radius:12px;background:rgba(7,9,13,.55);min-width:0}
 .svc h3{margin:0 0 6px;font-size:15px}
 .svc .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px;vertical-align:1px}
@@ -480,6 +607,7 @@ footer a{color:var(--cyan)}
     <span><strong>OPERATION MOONWORKS</strong><small>Moon Man Mission Control</small></span>
   </div>
   <div class="head-right"><span id="clk"></span>
+    <button class="button btn-sm" onclick="startAll()">Start All</button>
     <button class="button button-secondary btn-sm" onclick="stopAll()">Stop All Services</button>
   </div>
 </header>
@@ -493,6 +621,7 @@ footer a{color:var(--cyan)}
         <input type="text" id="askbox" placeholder="Type to MoonMan, Enter to send">
         <label class="speak"><input type="checkbox" id="saychk" checked> speak reply on eye</label>
         <button class="button button-primary btn-sm" style="min-height:44px" onclick="ask()">Send</button>
+        <button class="button button-secondary btn-sm" style="min-height:44px" id="askcancel" onclick="cancelAsk()" disabled>Cancel</button>
       </div>
       <div id="thinking"></div><div id="hist"></div>
     </div>
@@ -502,6 +631,24 @@ footer a{color:var(--cyan)}
       <div class="meta">PAN</div><div class="bar"><i id="panb"></i></div>
       <div class="meta">TILT</div><div class="bar"><i id="tiltb"></i></div>
       <div class="meta" id="fcs"></div>
+    </div>
+    <div class="panel"><h2>SERVOS <span class="tag">MANUAL</span></h2>
+      <div class="meta">Pan + visor are rig-safe. Tilt range unverified: nudge only.</div>
+      <div class="meta">Pan <b id="sv_pan_v">90</b></div>
+      <input type="range" id="sv_pan" min="0" max="180" value="90">
+      <div class="meta">Tilt <b id="sv_tilt_v">90</b> (provisional)</div>
+      <div class="talk-row">
+        <button class="button button-secondary btn-sm" onclick="servoNudge(-5)">-5</button>
+        <button class="button button-secondary btn-sm" onclick="servoNudge(5)">+5</button>
+        <button class="button button-secondary btn-sm" onclick="servoTilt(90)">Center</button>
+      </div>
+      <div class="meta">Visor <b id="sv_visor_v">35</b></div>
+      <input type="range" id="sv_visor" min="35" max="103" value="35">
+      <div class="talk-row">
+        <button class="button button-secondary btn-sm" onclick="servoVisor(103)">Open</button>
+        <button class="button button-secondary btn-sm" onclick="servoVisor(35)">Close</button>
+      </div>
+      <div class="meta" id="sv_msg"></div>
     </div>
     <div class="panel"><h2>HELMET CAM</h2>
       <img class="cam" src="__CAM__" onerror="this.outerHTML='<div class=meta>camera unreachable</div>'">
@@ -514,13 +661,17 @@ footer a{color:var(--cyan)}
     </div>
     <div class="panel"><h2>ARCHIE PRINT <span class="tag">APPROVAL</span></h2>
       <div class="meta" id="archie_info">loading...</div>
+      <div class="meta" id="archie_cd"></div>
       <div class="talk-row"><input type="text" id="archie_file" placeholder="plate_1.gcode">
-      <button class="button button-primary btn-sm" style="min-height:44px" onclick="approveArchie()">Approve</button></div>
+      <button class="button button-primary btn-sm" style="min-height:44px" onclick="approveArchie()">Approve</button>
+      <button class="button button-secondary btn-sm" style="min-height:44px" onclick="cancelArchie()">Cancel</button></div>
       <div class="meta" id="archie_msg"></div>
+      <div class="meta" id="archie_hist"></div>
     </div>
   </div>
 </main>
 <footer><span>OPERATION MOONWORKS &middot; MOON MAN</span>
+<span id="ver">__VER__ &middot; up since __STARTED__</span>
 <span>pricing: <a href="https://dev.meta.ai/docs/pricing-rate-limits">dev.meta.ai/docs/pricing-rate-limits</a></span></footer>
 <script>
 const NAMES=['brain','voice','track','view'];
@@ -551,9 +702,10 @@ async function refreshSvcs(){
   }
  }
  for(const v of s){
-  const cls=v.running?'on':(v.orphan_pid?'warn':'off');
+  const failed=!v.running&&!v.orphan_pid&&v.exit!=null&&v.exit!==0;
+  const cls=v.running?'on':(v.orphan_pid?'warn':(failed?'err':'off'));
   const st=v.running?('RUNNING pid='+v.pid+' up='+v.uptime_s+'s')
-    :(v.orphan_pid?('ORPHAN pid='+v.orphan_pid):'STOPPED');
+    :(v.orphan_pid?('ORPHAN pid='+v.orphan_pid):('STOPPED'+(v.exit!=null?' (exit '+v.exit+')':'')));
   const dot=document.getElementById('dot-'+v.name),stEl=document.getElementById('st-'+v.name);
   if(dot&&stEl){dot.className='dot '+cls;if(stEl.textContent!==st)stEl.textContent=st;}
   const l=await (await fetch('/api/logs?name='+v.name)).json();
@@ -561,12 +713,40 @@ async function refreshSvcs(){
   if(logEl)setLog(logEl,l.lines.join('\n'));
  }
 }
+let archieDeadline=0;
+function tickArchie(){
+ const el=document.getElementById('archie_cd');
+ if(!el)return;
+ if(!archieDeadline){el.textContent='';el.className='meta';return;}
+ const left=Math.max(0,Math.round(archieDeadline-Date.now()/1000));
+ const mm=Math.floor(left/60),ss=('0'+(left%60)).slice(-2);
+ el.textContent='approval expires in '+mm+':'+ss;
+ el.className='meta'+(left<60?' urgent':'');
+ if(!left)archieDeadline=0;
+}
+let tiltCmd=90;
+async function servoPost(axis,value){
+ const m=document.getElementById('sv_msg');
+ try{
+  const r=await fetch('/api/servo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({axis:axis,value:value})});
+  const j=await r.json();
+  m.textContent=j.ok?('sent '+axis+' '+j.value):('error: '+(j.error||'failed'));
+ }catch(e){m.textContent='(request failed)';}
+}
+function servoPan(v){v=+v;document.getElementById('sv_pan_v').textContent=v;servoPost('pan',v);}
+function servoVisor(v){v=+v;document.getElementById('sv_visor').value=v;document.getElementById('sv_visor_v').textContent=v;servoPost('visor',v);}
+function servoTilt(v){tiltCmd=Math.max(45,Math.min(135,v));document.getElementById('sv_tilt_v').textContent=tiltCmd;servoPost('tilt',tiltCmd);}
+function servoNudge(d){servoTilt(tiltCmd+d);}
 async function refreshArchie(){
  try{
   const a=await (await fetch('/api/archie/status')).json();
-  const el=document.getElementById('archie_info');
-  if(a.record){el.textContent=a.record.printer+' '+a.record.filename+' job '+a.record.job_id+' ['+a.record.status+']'+(a.expires_in!=null?' expires ~'+a.expires_in+'s':'');}
+  const el=document.getElementById('archie_info'),hi=document.getElementById('archie_hist');
+  if(a.staged){el.textContent='STAGED '+a.staged.filename+' job '+a.staged.job_id+' ['+a.staged.status+']';}
   else{el.textContent=a.text||'No Archie file staged.';}
+  if(a.last){hi.textContent='last job: '+a.last.filename+' job '+a.last.job_id+' ['+a.last.status+']';}
+  else{hi.textContent='';}
+  archieDeadline=(a.staged&&a.expires_at)?a.expires_at:0;
+  tickArchie();
  }catch(e){document.getElementById('archie_info').textContent='approval state unavailable';}
 }
 async function approveArchie(){
@@ -576,6 +756,16 @@ async function approveArchie(){
  m.textContent='approving...';
  try{
   const r=await fetch('/api/archie/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f})});
+  const j=await r.json();
+  m.textContent=j.message||j.error||'(no response)';
+ }catch(e){m.textContent='(request failed)';}
+ refreshArchie();
+}
+async function cancelArchie(){
+ const m=document.getElementById('archie_msg');
+ m.textContent='cancelling...';
+ try{
+  const r=await fetch('/api/archie/cancel',{method:'POST'});
   const j=await r.json();
   m.textContent=j.message||j.error||'(no response)';
  }catch(e){m.textContent='(request failed)';}
@@ -614,27 +804,39 @@ async function refresh(){
  document.getElementById('clk').textContent=new Date().toLocaleTimeString();
 }
 async function ctl(a,n){await api('/api/'+a+'?name='+n);refreshSvcs();refresh();}
+async function startAll(){await api('/api/startall');refreshSvcs();refresh();}
 async function stopAll(){await api('/api/stopall');refreshSvcs();refresh();}
 const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const fmt=s=>esc(s).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>');
 const hist=[];
+let askCtl=null,askTimer=null;
+function cancelAsk(){if(askCtl)askCtl.abort();}
 async function ask(){
  const box=document.getElementById('askbox'),t=box.value.trim();
- if(!t)return;box.value='';
- document.getElementById('thinking').textContent='thinking...';
+ if(!t||askCtl)return;box.value='';
+ const think=document.getElementById('thinking'),cx=document.getElementById('askcancel');
+ askCtl=new AbortController();cx.disabled=false;
+ const t0=Date.now();
+ think.textContent='thinking... 0s';
+ askTimer=setInterval(()=>{think.textContent='thinking... '+Math.round((Date.now()-t0)/1000)+'s';},1000);
+ const to=setTimeout(()=>askCtl.abort(),65000);
  try{
   const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({text:t,speak:document.getElementById('saychk').checked})});
+   body:JSON.stringify({text:t,speak:document.getElementById('saychk').checked}),signal:askCtl.signal});
   const j=await r.json();
   hist.unshift({q:t,a:j.answer||('(no answer: '+(j.status||j.error)+')')});
- }catch(e){hist.unshift({q:t,a:'(request failed)'});}
- document.getElementById('thinking').textContent='';
+ }catch(e){hist.unshift({q:t,a:(e&&e.name==='AbortError'?'(cancelled)':'(request failed)')});}
+ clearTimeout(to);clearInterval(askTimer);askCtl=null;askTimer=null;cx.disabled=true;
+ think.textContent='';
  const h=document.getElementById('hist');h.innerHTML='';
  for(const e of hist.slice(0,10)){
-  h.innerHTML+='<div class=chat><span class=who>YOU</span>'+esc(e.q)+'</div><div class="chat a"><span class=who>MOONMAN</span>'+esc(e.a)+'</div>';
+  h.innerHTML+='<div class=chat><span class=who>YOU</span>'+fmt(e.q)+'</div><div class="chat a"><span class=who>MOONMAN</span>'+fmt(e.a)+'</div>';
  }
 }
-refreshSvcs();refresh();refreshArchie();setInterval(refresh,2000);setInterval(refreshSvcs,6000);setInterval(refreshArchie,6000);
+refreshSvcs();refresh();refreshArchie();setInterval(refresh,2000);setInterval(refreshSvcs,6000);setInterval(refreshArchie,6000);setInterval(tickArchie,1000);
 document.getElementById('askbox').addEventListener('keydown',e=>{if(e.key==='Enter')ask();});
+document.getElementById('sv_pan').addEventListener('change',e=>servoPan(e.target.value));
+document.getElementById('sv_visor').addEventListener('change',e=>servoVisor(e.target.value));
 </script></body></html>
 
 """
@@ -671,7 +873,9 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(url.query)
         if url.path == "/":
-            page = PAGE.replace("__CAM__", CAMERA_URL).encode()
+            page = PAGE.replace("__CAM__", CAMERA_URL).replace(
+                "__VER__", _git_hash()).replace(
+                "__STARTED__", STARTED_AT).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(page)))
@@ -693,14 +897,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._asset("favicon.png", "image/png")
         elif url.path == "/api/archie/status":
             try:
+                from archie_approval import MAX_AGE as _arch_max_age
                 from archie_approval import current as _arch_current
                 from archie_approval import describe as _arch_desc
 
                 record, expires = _arch_current()
+                live = (isinstance(record, dict)
+                        and record.get("status") in ("pending", "approved"))
+                try:
+                    expires_at = (float(record["created"]) + _arch_max_age
+                                  if live else None)
+                except Exception:
+                    expires_at = None
                 self._json({"record": record, "expires_in": expires,
+                            "expires_at": expires_at,
+                            "staged": record if live else None,
+                            "last": record if (record and not live) else None,
                             "text": _arch_desc()})
             except Exception as error:
                 self._json({"record": None, "expires_in": None,
+                            "expires_at": None, "staged": None, "last": None,
                             "text": "approval state unavailable: %s"
                             % error})
         elif url.path == "/api/costs":
@@ -738,6 +954,9 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/api/stopall":
             stop_all()
             self._json({"ok": True})
+        elif url.path == "/api/startall":
+            start_all()
+            self._json({"ok": True})
         elif url.path == "/api/archie/approve":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -757,6 +976,42 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 self._json({"ok": False,
                             "message": "approve failed: %s" % error})
+        elif url.path == "/api/archie/cancel":
+            try:
+                from archie_approval import cancel as _arch_cancel
+
+                self._json({"ok": True, "message": _arch_cancel()})
+            except Exception as error:
+                self._json({"ok": False,
+                            "message": "cancel failed: %s" % error})
+        elif url.path == "/api/servo":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except Exception:
+                body = {}
+            axis = body.get("axis")
+            try:
+                value = int(body.get("value"))
+            except Exception:
+                value = None
+            spec = {"pan": ("moonman/helmet/angle", 0, 180),
+                    "tilt": ("moonman/helmet/tilt", 45, 135),
+                    "visor": ("moonman/visor/angle", 35, 103)}
+            if axis not in spec or value is None:
+                self._json({"ok": False,
+                            "error": "need axis pan|tilt|visor + int value"})
+            elif _mqtt.get("client") is None or not _mqtt["ok"]:
+                self._json({"ok": False, "error": "mqtt down"})
+            else:
+                topic, lo, hi = spec[axis]
+                value = max(lo, min(hi, value))
+                try:
+                    _mqtt["client"].publish(topic, str(value))
+                    self._json({"ok": True, "axis": axis, "value": value})
+                except Exception as error:
+                    self._json({"ok": False,
+                                "error": "publish failed: %s" % error})
         elif url.path == "/api/ask":
             try:
                 length = int(self.headers.get("Content-Length", "0"))

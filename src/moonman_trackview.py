@@ -39,6 +39,10 @@ CAMERA_URL = os.environ.get("MOONMAN_CAMERA_URL",
                              "http://192.168.1.11:8081/1/stream")
 STATUS_TOPIC = "moonman/track/status"
 FACES_TOPIC = "moonman/track/faces"
+LOOK_TOPIC = "moonman/track/look"
+EYE_LOOK_TOPIC = "moonman/eye/all/look"
+EYE_MIRROR_X = -1.0  # keep in sync with tracker MIRROR_X
+EYE_MIRROR_Y = -1.0  # keep in sync with tracker MIRROR_Y
 PAN_TOPIC = "moonman/helmet/angle"
 TILT_TOPIC = "moonman/helmet/tilt"
 MODEL_PATH = os.path.join(HERE, "face_detection_yunet.onnx")
@@ -127,16 +131,16 @@ def frame_reader():
                 buf.extend(chunk)
                 if len(buf) > 5_000_000:
                     del buf[:-1_000_000]
-                while True:
-                    start = buf.find(b"\xff\xd8")
-                    if start < 0:
-                        break
-                    end = buf.find(b"\xff\xd9", start + 2)
-                    if end < 0:
-                        break
-                    jpg = bytes(buf[start:end + 2])
-                    del buf[:end + 2]
-                    yield jpg
+                # Realtime: newest complete JPEG only, drop stale.
+                end = buf.rfind(b"\xff\xd9")
+                if end < 0:
+                    continue
+                start = buf.rfind(b"\xff\xd8", 0, end)
+                if start < 0:
+                    continue
+                jpg = bytes(buf[start:end + 2])
+                del buf[:]
+                yield jpg
         except Exception as error:
             log("camera read failed (%s), reconnecting..." % error)
             try:
@@ -175,6 +179,7 @@ def main():
     faces = []
     det_size = (0, 0)
     fps, frames, faces_seen, det_err = 0.0, 0, 0, 0
+    look_blank = False
     shape = "?"
     prev = time.time()
     for jpg in frame_reader():
@@ -211,6 +216,34 @@ def main():
                         x, y, bw, bh = (int(v) for v in f[:4])
                         faces.append((x, y, bw, bh, float(f[14])))
                 faces_seen += len(faces)
+
+                # Gaze reflex at detection rate: largest (closest)
+                # face steers the head AND the eye pupils. Camera
+                # rides the head so the tracker mapping converges.
+                _cli = getattr(shared, "client", None)
+                if faces and _cli is not None:
+                    try:
+                        _x, _y, _bw, _bh, _ = max(
+                            faces, key=lambda f: f[2] * f[3])
+                        _fx = (_x + _bw / 2) / w
+                        _fy = (_y + _bh / 2) / h
+                        _cli.publish(LOOK_TOPIC, json.dumps({
+                            "fx": round(_fx, 4),
+                            "fy": round(_fy, 4)}))
+                        _rx = int(EYE_MIRROR_X * (_fx - 0.5) * 200)
+                        _ry = int(EYE_MIRROR_Y * (_fy - 0.5) * 200)
+                        _cli.publish(EYE_LOOK_TOPIC, "%d,%d" % (
+                            max(-100, min(100, _rx)),
+                            max(-100, min(100, _ry))))
+                    except Exception:
+                        pass
+                    look_blank = False
+                elif _cli is not None and not look_blank:
+                    try:
+                        _cli.publish(EYE_LOOK_TOPIC, "center")
+                    except Exception:
+                        pass
+                    look_blank = True
 
             with shared.lock:
                 status = dict(shared.status) if shared.status else None

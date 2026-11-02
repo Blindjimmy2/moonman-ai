@@ -52,8 +52,10 @@ TILT_SPEED = 90.0
 HOME_SPEED = 25.0    # slow drift home when idle
 FX_DEG = 60.0        # full image width in pan degrees (tune to lens)
 FY_DEG = 45.0        # full image height in tilt degrees
-MIRROR_X = 1.0       # set -1.0 if left/right is flipped on the rig
-MIRROR_Y = 1.0       # set -1.0 if up/down is flipped on the rig
+LOOK_GAIN = 0.6      # nudge scale per face message
+LOOK_DEADBAND = 0.03  # ignore offsets < 3% of frame (lock)
+MIRROR_X = -1.0       # set -1.0 if left/right is flipped on the rig
+MIRROR_Y = -1.0       # set -1.0 if up/down is flipped on the rig
 IDLE_HOME_SEC = 5.0  # no commands -> drift home (auto mode only)
 AUTOSWAY = True
 SWAY_DEG = 1.5
@@ -61,7 +63,7 @@ SWAY_HZ = 0.15
 LOOP_DT = 0.05       # 20 Hz motion loop
 PUB_MIN_DT = 0.1     # at most 10 servo pubs/sec
 PUB_MIN_DEG = 1      # only publish whole-degree changes
-SIM_ONLY = True        # True: suppress moonman/helmet/* servo pubs (sim only)
+SIM_ONLY = False        # True: suppress moonman/helmet/* servo pubs (sim only)
 FOCUS_KEEP_SEC = 15.0  # status keeps the last agent focus this long
 
 _state_lock = threading.Lock()
@@ -99,10 +101,13 @@ def on_look(payload):
         if "fx" in obj and "fy" in obj:
             fx = _clamp(float(obj["fx"]), 0.0, 1.0)
             fy = _clamp(float(obj["fy"]), 0.0, 1.0)
-            _tpan = _clamp(_tpan + MIRROR_X * (fx - 0.5) * FX_DEG,
-                           PAN_MIN, PAN_MAX)
-            _ttilt = _clamp(_ttilt + MIRROR_Y * (fy - 0.5) * FY_DEG,
-                            TILT_MIN, TILT_MAX)
+            ex, ey = fx - 0.5, fy - 0.5
+            if abs(ex) >= LOOK_DEADBAND:
+                _tpan = _clamp(_tpan + MIRROR_X * ex * FX_DEG * LOOK_GAIN,
+                               PAN_MIN, PAN_MAX)
+            if abs(ey) >= LOOK_DEADBAND:
+                _ttilt = _clamp(_ttilt + MIRROR_Y * ey * FY_DEG * LOOK_GAIN,
+                                TILT_MIN, TILT_MAX)
             _focus = {"fx": fx, "fy": fy, "ts": time.time()}
         _last_cmd = time.time()
         log("target pan=%.0f tilt=%.0f" % (_tpan, _ttilt))

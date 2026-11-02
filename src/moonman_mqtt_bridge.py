@@ -80,7 +80,9 @@ def _voice_text(text, device=""):
                 "moonman release ")
     if low in exact or low.startswith(prefixes):
         return text
-    return text + "\n[Voice reply: keep it brief and conversational.]"
+    return text + ("\n[Voice reply: this is SPOKEN aloud - 1-3 short "
+                   "sentences, under 500 characters, no lists, no markdown, "
+                   "no code.]")
 
 
 def handle(payload):

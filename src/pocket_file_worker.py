@@ -34,15 +34,15 @@ def clean_speech(text):
     # Same cleanup as voice_worker: strip code blocks and markdown formatting.
     text = re.sub(r"```.*?```", " ", text, flags=re.S)
     text = re.sub(r"`([^`]*)`", r"\1", text)
-    text = re.sub(r"\\*\\*|__|(?<!\\w)\\*(?!\\s)", "", text)
-    text = re.sub(r"(?m)^\\s*[-*]\\s+", "", text)
-    text = re.sub(r"(?m)^\\s*#+\\s*", "", text)
+    text = re.sub(r"\*\*|__|(?<!\w)\*(?!\s)", "", text)
+    text = re.sub(r"(?m)^\s*[-*]\s+", "", text)
+    text = re.sub(r"(?m)^\s*#+\s*", "", text)
     return " ".join(text.split())
 
 
 def split_chunks(text):
     # Sentence-ish splits, each at most MAX_CHUNK chars.
-    parts = re.split(r"(?<=[.!?])\\s+", text)
+    parts = re.split(r"(?<=[.!?])\s+", text)
     chunks, cur = [], ""
     for part in parts:
         if len(cur) + 1 + len(part) <= MAX_CHUNK:
