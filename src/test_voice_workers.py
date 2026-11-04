@@ -75,4 +75,13 @@ flat = "".join("".join(chunks_s).split())
 assert flat == "".join(TEXT.split()), "chars lost"
 print("PASS chunk parity + bounds:", [len(c) for c in chunks_s])
 
+BRAIN = Path(r"C:\Users\twill\Documents\MoonMan\moonman_brain_voice.py").read_text(encoding="utf-8")
+# Demo mute: /listen discards every ear's clips while set.
+assert "MUTE_FILE" in BRAIN and ".ear_mute" in BRAIN, \
+    "brain has no mute sentinel"
+assert 'voice_activity("silent", reason="muted")' in BRAIN, \
+    "muted voice-activity path missing"
+assert 'self._silent("(muted)")' in BRAIN, "muted 204 missing"
+print("PASS brain /listen mute gate")
+
 print("ALL VOICE WORKER TESTS PASSED")

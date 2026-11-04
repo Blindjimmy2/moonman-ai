@@ -409,6 +409,14 @@ def _speak_forward(answer):
         time.sleep(len(piece) / 15.0 + 2.5)
 
 
+MUTE_FILE = r"C:\MoonworksDev\moonman-ai\src\.ear_mute"
+
+
+def _muted():
+    """Demo mute sentinel the dashboard Mute button toggles."""
+    return os.path.exists(MUTE_FILE)
+
+
 def _mic_state():
     """Listening / Processing / Disconnected / Error from real signals."""
     now = time.time()
@@ -422,6 +430,9 @@ def _mic_state():
     ev = _mqtt.get("mic") or {}
     age = round(now - _mqtt["mic_ts"], 1) if _mqtt["mic_ts"] else None
     ear = (_mqtt.get("ear") or {}).get("state")
+    if _muted():
+        return {"state": "Muted", "detail": "demo mute on",
+                "age": age, "event": ev, "ear": ear}
     if not voice_up:
         return {"state": "Disconnected", "detail": "voice server down",
                 "age": age, "event": ev, "ear": ear}
@@ -432,7 +443,7 @@ def _mic_state():
         return {"state": "Processing",
                 "detail": ev.get("text") or "clip", "age": age, "event": ev,
                 "ear": ear}
-    src = "Pi ear" if ear == "online" else "Eye mic"
+    src = "Pi ear" if ear == "online" else ("Laptop mic" if ear == "online-laptop" else "Eye mic")
     return {"state": "Listening", "detail": src, "age": age, "event": ev,
             "ear": ear}
 
@@ -622,6 +633,7 @@ footer a{color:var(--cyan)}
         <label class="speak"><input type="checkbox" id="saychk" checked> speak reply on eye</label>
         <button class="button button-primary btn-sm" style="min-height:44px" onclick="ask()">Send</button>
         <button class="button button-secondary btn-sm" style="min-height:44px" id="askcancel" onclick="cancelAsk()" disabled>Cancel</button>
+        <button class="button button-secondary btn-sm" style="min-height:44px" id="mutebtn" onclick="toggleMute()">Mute mics</button>
       </div>
       <div id="thinking"></div><div id="hist"></div>
     </div>
@@ -664,7 +676,8 @@ footer a{color:var(--cyan)}
       <div class="meta" id="archie_cd"></div>
       <div class="talk-row"><input type="text" id="archie_file" placeholder="plate_1.gcode">
       <button class="button button-primary btn-sm" style="min-height:44px" onclick="approveArchie()">Approve</button>
-      <button class="button button-secondary btn-sm" style="min-height:44px" onclick="cancelArchie()">Cancel</button></div>
+      <button class="button button-secondary btn-sm" style="min-height:44px" onclick="cancelArchie()">Cancel</button>
+      <button class="button button-primary btn-sm" style="min-height:44px" onclick="startArchie()">Start Print</button></div>
       <div class="meta" id="archie_msg"></div>
       <div class="meta" id="archie_hist"></div>
     </div>
@@ -771,8 +784,20 @@ async function cancelArchie(){
  }catch(e){m.textContent='(request failed)';}
  refreshArchie();
 }
+async function startArchie(){
+ const m=document.getElementById('archie_msg');
+ m.textContent='starting... (printer must be idle, approval live)';
+ try{
+  const r=await fetch('/api/archie/start',{method:'POST'});
+  const j=await r.json();
+  m.textContent=j.message||j.error||'(no response)';
+ }catch(e){m.textContent='(request failed)';}
+ refreshArchie();
+}
 async function refresh(){
  const t=await (await fetch('/api/state')).json();
+ const mb=document.getElementById('mutebtn');
+ if(mb){mb.textContent=t.muted?'UNMUTE MICS':'Mute mics';mb.style.background=t.muted?'#a33':'';}
  const trk=document.getElementById('trk'),fcs=document.getElementById('fcs');
  if(t.track&&t.track_age<3){
   trk.textContent='mode='+t.track.mode+' pan='+t.track.pan+' tilt='+t.track.tilt;
@@ -781,7 +806,7 @@ async function refresh(){
   document.getElementById('tiltb').style.width=Math.min(100,Math.max(0,tl))+'%';
  }else{trk.textContent='tracker offline';}
  const mc=document.getElementById('mic'),me=document.getElementById('micev');
- const dot=t.mic.state==='Listening'?'on':(t.mic.state==='Processing'?'warn':'off');
+ const dot=t.mic.state==='Listening'?'on':((t.mic.state==='Processing'||t.mic.state==='Muted')?'warn':'off');
  mc.innerHTML='<span class=\'dot '+dot+'\'></span>MIC: '+t.mic.state+' ('+t.mic.detail+')';
  const ev=t.mic.event||{};
  me.textContent='last: '+(ev.event||'none')+(t.mic.age!=null?' '+t.mic.age+'s ago':'')
@@ -811,6 +836,7 @@ const fmt=s=>esc(s).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n/
 const hist=[];
 let askCtl=null,askTimer=null;
 function cancelAsk(){if(askCtl)askCtl.abort();}
+async function toggleMute(){await api('/api/mute');refresh();}
 async function ask(){
  const box=document.getElementById('askbox'),t=box.value.trim();
  if(!t||askCtl)return;box.value='';
@@ -934,7 +960,8 @@ class Handler(BaseHTTPRequestHandler):
                         "faces_age": round(now - _mqtt["faces_ts"], 1)
                         if _mqtt["faces_ts"] else None,
                         "mqtt": "up" if _mqtt["ok"] else "down",
-                        "mic": _mic_state()})
+                        "mic": _mic_state(),
+                        "muted": _muted()})
         else:
             self._json({"error": "not found"}, 404)
 
@@ -951,6 +978,18 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/api/restart":
             ok, msg, svc = svc_restart(name)
             self._json({"ok": ok, "message": msg, "service": svc})
+        elif url.path == "/api/mute":
+            try:
+                if _muted():
+                    os.remove(MUTE_FILE)
+                    muted = False
+                else:
+                    open(MUTE_FILE, "w").write("muted\n")
+                    muted = True
+                self._json({"ok": True, "muted": muted})
+            except Exception as error:
+                self._json({"ok": False,
+                            "message": "mute failed: %s" % error})
         elif url.path == "/api/stopall":
             stop_all()
             self._json({"ok": True})
@@ -984,6 +1023,48 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 self._json({"ok": False,
                             "message": "cancel failed: %s" % error})
+        elif url.path == "/api/archie/start":
+            # Supervised execution: identical guards to the agent path.
+            try:
+                from archie_approval import ApprovalError as _ArchErr2
+                from archie_approval import consume as _arch_consume
+                from archie_approval import current as _arch_cur
+                from archie_approval import printer_idle as _arch_idle
+                from archie_approval import remote_file_ok as _arch_fok
+                from archie_approval import verify_local as _arch_vloc
+                from archie_approval import confirm_start as _arch_conf
+                from archie_start_print import archie_start_print as _arch_go
+                rec, _expires = _arch_cur()
+                if rec is None:
+                    raise _ArchErr2("No file is staged awaiting approval.")
+                idle, idle_reason, _snap = _arch_idle()
+                if not idle:
+                    self._json({"ok": False,
+                                "message": "printer not ready: %s"
+                                % idle_reason})
+                    return
+                record = _arch_consume(rec.get("filename", ""))
+                fname = record["filename"]
+                if not _arch_fok(fname, record["size"]):
+                    self._json({"ok": False,
+                                "message": "Staged file no longer on Archie. "
+                                "Re-upload, then re-approve."})
+                    return
+                local_ok, local_reason = _arch_vloc(record)
+                if not local_ok:
+                    self._json({"ok": False,
+                                "message": "local verify failed: %s"
+                                % local_reason})
+                    return
+                result = _arch_go(fname, approved=True)
+                conf = _arch_conf(fname)
+                self._json({"ok": True,
+                            "message": "start %s -> Archie: %s; confirm: %s"
+                            % (fname, result.get("status"), conf)})
+            except _ArchErr2 as error:
+                self._json({"ok": False, "message": "Not started: %s" % error})
+            except Exception as error:
+                self._json({"ok": False, "message": "start failed: %s" % error})
         elif url.path == "/api/servo":
             try:
                 length = int(self.headers.get("Content-Length", "0"))

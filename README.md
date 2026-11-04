@@ -36,7 +36,7 @@ workbench.
 Built by **Operation Moonworks** for the **Meta Global AI Developer
 Hackathon** (Oct 26 – Nov 4, 2026) · **Indie track** · **Push the Frontier**.
 
-> **Demo video (3 min):** [VIDEO_URL — coming before Nov 4]
+> **Demo video (3 min):** [Moon Man AI — demo film](https://youtu.be/EsXrQiEl91w)
 
 ## What was built during the hackathon
 
@@ -52,6 +52,7 @@ Every commit in this repository is dated inside the event window
 | Oct 31 | `b646d89` | Voice + tracking + dashboard integration |
 | Nov 1 | `a2a3599` | Mission Control brand, Archie print approval, AI cost telemetry |
 | Nov 2 | `8c0a7b5` | One-click start, live face tracking, visor voice command, orphan fixes |
+| Nov 3 | `371cba5` | Submission README pitch, env example, secret scrub |
 
 Companion systems built the same week (outside this repo, same builder):
 right-eye ESP32 servo firmware (helmet pan/tilt + visor on PCA9685),
@@ -79,7 +80,7 @@ British voice pipeline.
         │                                        │
         ▼                                        ▼
   Eye speaker ◀── TTS              Helmet servos · Eye gaze · Visor
-  Pi ear mic ──▶ STT                         ▲
+  Pi / laptop ear mics ──▶ STT                         ▲
   Helmet cam ──▶ face detect ──▶ gaze target ┘
   Mission Control dashboard: services, Ask, servos, printers, costs
 ```
@@ -116,6 +117,9 @@ python test_orphan_liveness.py
 python test_agent_tools.py
 python test_mqtt_bridge.py
 python test_voice_workers.py
+python test_archie_approval.py
+python test_archie_filaments.py
+python test_archie_start_route.py
 ```
 
 ## License / rights

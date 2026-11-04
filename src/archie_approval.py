@@ -104,6 +104,35 @@ def pend(filename, sha256, size, local_path=""):
     return record
 
 
+_NUMWORDS = {"zero": "0", "one": "1", "two": "2", "three": "3",
+             "four": "4", "five": "5", "six": "6", "seven": "7",
+             "eight": "8", "nine": "9"}
+
+
+def _spoken_match(want, have):
+    """True if a voice transcript plausibly names the staged file.
+
+    Speech turns plate_1.gcode into 'plate 1G code' or 'plate one'.
+    Normalize both sides (lowercase, number words to digits, drop
+    everything but alphanumerics) and accept only a clear containment
+    either way, with at least 5 matching characters so 'cube' or 'it'
+    can never approve. All other guards (status, expiry, single-use)
+    still apply.
+    """
+    import re
+
+    def norm(text):
+        text = str(text or "").lower()
+        for word, digit in _NUMWORDS.items():
+            text = re.sub(r"\b%s\b" % word, digit, text)
+        return re.sub(r"[^a-z0-9]", "", text)
+
+    a, b = norm(want), norm(have)
+    if len(a) < 5 or len(b) < 5:
+        return False
+    return a in b or b in a
+
+
 def approve(filename):
     """Arm ONE print start. Returns a human-readable confirmation."""
     want = (filename or "").strip()
@@ -119,7 +148,7 @@ def approve(filename):
             "Staged job is %s, not approvable." % record.get("status")
         )
     have = str(record.get("filename", ""))
-    if have.lower() != want.lower():
+    if have.lower() != want.lower() and not _spoken_match(want, have):
         raise ApprovalError(
             "Staged file is %s, not %s. Nothing approved." % (have, want)
         )

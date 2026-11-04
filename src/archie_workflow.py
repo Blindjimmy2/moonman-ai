@@ -12,6 +12,37 @@ PROFILES = EXE.parent / "resources" / "profiles" / "Creality"
 MACHINE = PROFILES / "machine" / "Creality K1 SE 0.4 nozzle.json"
 PROCESS = PROFILES / "process" / "0.20mm  Standard @Creality K1 SE 0.4 nozzle.json"
 FILAMENT = PROFILES / "filament" / "Generic ASA @Creality K1 SE 0.4 nozzle.json"
+DEFAULT_FILAMENT = "Generic ASA"
+
+
+def list_archie_filaments():
+    """Material names profiled for Archie machine (short names)."""
+    tag = "@" + MACHINE.stem + ".json"
+    try:
+        files = sorted((PROFILES / "filament").glob("*" + tag))
+    except Exception:
+        return []
+    return [f.name[:-len(tag)].strip() for f in files]
+
+
+def _resolve_filament(name):
+    """Profile path for a listed material (exact or case-insensitive).
+
+    Anything not on the list raises ValueError, so slicer paths can
+    never escape the profiles directory.
+    """
+    if name is None:
+        return FILAMENT
+    want = str(name).strip()
+    mats = list_archie_filaments()
+    if want in mats:
+        picked = want
+    else:
+        lowered = [m for m in mats if m.lower() == want.lower()]
+        if len(lowered) != 1:
+            raise ValueError("unknown Archie filament %r" % (name,))
+        picked = lowered[0]
+    return PROFILES / "filament" / (picked + " @" + MACHINE.stem + ".json")
 
 def archie_status():
     ws = websocket.create_connection("ws://192.168.1.10:9999", timeout=6)
@@ -31,14 +62,15 @@ def archie_status():
     finally:
         ws.close()
 
-def prepare_archie_print(stl_path):
+def prepare_archie_print(stl_path, filament=None):
     path = Path(stl_path).resolve()
     if not path.is_file() or path.suffix.lower() != ".stl":
         raise ValueError("Valid STL required")
     if not path.is_relative_to(GENERATED):
         raise ValueError("STL must be inside Moon Man generated folder")
 
-    for required in (EXE, MACHINE, PROCESS, FILAMENT):
+    filament_path = _resolve_filament(filament)
+    for required in (EXE, MACHINE, PROCESS, filament_path):
         if not required.is_file():
             raise FileNotFoundError(str(required))
 
@@ -51,7 +83,7 @@ def prepare_archie_print(stl_path):
     args = [
         str(EXE),
         "--load-settings", str(MACHINE) + ";" + str(PROCESS),
-        "--load-filaments", str(FILAMENT),
+        "--load-filaments", str(filament_path),
         "--slice", "0",
         "--ensure-on-bed",
         "--outputdir", str(output),
@@ -78,6 +110,7 @@ def prepare_archie_print(stl_path):
     return {
         "printer": "Archie",
         "status": "sliced_locally_not_uploaded",
+        "filament": filament_path.stem,
         "gcode": str(gcode),
         "bytes": gcode.stat().st_size,
         "sha256": hashlib.sha256(gcode.read_bytes()).hexdigest(),

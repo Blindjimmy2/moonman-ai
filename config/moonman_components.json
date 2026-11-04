@@ -21,6 +21,14 @@
     "YOKE_NEW_L",
     "YOKE_NEW_R",
     "collar",
+    "cube_10mm",
+    "cube_10mm_M3",
+    "cube_10mm_M4",
+    "cube_15mm",
+    "cube_20mm",
+    "cube_20mm_M3",
+    "cube_20mm_M6",
+    "demo_cube",
     "moonblock"
   ]
 }

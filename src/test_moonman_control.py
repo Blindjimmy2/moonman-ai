@@ -28,6 +28,8 @@ for required in (
     "/api/archie/status",
     "/api/archie/approve",
     "/api/archie/cancel",
+    "/api/archie/start",
+    "/api/mute",
     "/api/servo",
     "/api/ask",
     "/api/startall",
@@ -39,6 +41,16 @@ print("PASS required endpoints present")
 assert "startAll" in CONTROL and "Start All" in CONTROL, \
     "missing Start All button"
 print("PASS start-all present")
+assert "startArchie" in CONTROL and "/api/archie/start" in CONTROL, \
+    "missing Start Print"
+assert "rec, _expires = _arch_cur()" in CONTROL, \
+    "start route must unpack current() tuple"
+print("PASS archie start present")
+assert "toggleMute" in CONTROL and "mutebtn" in CONTROL, \
+    "missing mute button"
+assert "_muted()" in CONTROL and "Muted" in CONTROL, \
+    "missing mute state"
+print("PASS mic mute present")
 
 # Dashboard page keeps the element IDs the JS refresh loop needs.
 for element_id in (

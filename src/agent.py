@@ -449,7 +449,7 @@ CAD_TOOLS.extend(MOONMAN_V2_TOOLS)
 # MOONMAN_MARVIN_WORKFLOW_V1
 
 # ARCHIE_TOOLS_V1
-from archie_workflow import archie_status, prepare_archie_print
+from archie_workflow import archie_status, prepare_archie_print, list_archie_filaments
 
 CAD_TOOLS.extend([
     {
@@ -468,16 +468,32 @@ CAD_TOOLS.extend([
         "type": "function",
         "function": {
             "name": "prepare_archie_print",
-            "description": "Slice an STL for Archie using Creality Print and ASA. Does not upload or start printing.",
+            "description": "Slice an STL for Archie using Creality Print (default Generic ASA; pass filament from archie_filaments to change material). Does not upload or start printing.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "stl_path": {
                         "type": "string",
                         "description": "Absolute path to an STL in Moon Man's generated folder."
+                    },
+                    "filament": {
+                        "type": "string",
+                        "description": "Material name from archie_filaments (e.g. Generic PLA). Default: Generic ASA."
                     }
                 },
                 "required": ["stl_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "archie_filaments",
+            "description": "List filament materials profiled for Archie (K1 SE 0.4). Pass a name as prepare_archie_print filament to print in something besides ASA.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False
             }
         }
     }
@@ -1652,7 +1668,13 @@ def ask_moonman(question):
                 elif name == "archie_status":
                     result = archie_status()
                 elif name == "prepare_archie_print":
-                    result = prepare_archie_print(args.get("stl_path", ""))
+                    result = prepare_archie_print(args.get("stl_path", ""),
+                                                  args.get("filament"))
+                elif name == "archie_filaments":
+                    mats = list_archie_filaments()
+                    result = {"status": "ok", "filaments": mats} if mats else \
+                        {"status": "unavailable",
+                         "message": "no Archie filament profiles found"}
                 elif name == "archie_inspect":
                     result = archie_inspect(args.get("seconds", 8))
                 elif name == "archie_list_files":
