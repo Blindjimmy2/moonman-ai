@@ -16,6 +16,8 @@ prints.
 - PrusaSlicer slicing plus G-code validation before anything reaches a printer.
 - Marvin (Longer LK5 Pro) via OctoPrint: model upload with human approval
   before print.
+- Archie (Creality K1 SE): first successful prints completed through the
+  agent workflow.
 - Voice with Pocket TTS: speak to Moon Man and hear spoken responses.
 - On-demand camera vision: the agent looks at the workspace when a task
   needs eyes.
@@ -26,4 +28,4 @@ prints.
 - Complete autonomous bracket assembly validation.
 - Servo head tracking refinement.
 - Design retrieval for reprint requests (e.g. Gumbler collar).
-- Multi-printer support including Archie (Creality K1 SE).
+- Expanded multi-printer support.
